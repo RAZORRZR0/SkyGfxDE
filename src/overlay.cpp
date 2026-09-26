@@ -17,12 +17,29 @@ volatile bool g_menuOpen = false;
 typedef HRESULT(STDMETHODCALLTYPE* Present_Fn)(IDXGISwapChain*, UINT, UINT);
 typedef HRESULT(STDMETHODCALLTYPE* ResizeBuffers_Fn)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
 typedef BOOL(WINAPI* SetCursorPos_Fn)(int, int);
+typedef BOOL(WINAPI* GetCursorPos_Fn)(POINT*);
 typedef BOOL(WINAPI* ClipCursor_Fn)(const RECT*);
+typedef BOOL(WINAPI* ReleaseCapture_Fn)();
+typedef SHORT(WINAPI* GetAsyncKeyState_Fn)(int);
 
 static Present_Fn o_Present = nullptr;
 static ResizeBuffers_Fn o_ResizeBuffers = nullptr;
 static SetCursorPos_Fn o_SetCursorPos = nullptr;
+static GetCursorPos_Fn o_GetCursorPos = nullptr;
 static ClipCursor_Fn o_ClipCursor = nullptr;
+static ReleaseCapture_Fn o_ReleaseCapture = nullptr;
+static GetAsyncKeyState_Fn o_GetAsyncKeyState = nullptr;
+
+// While the menu is open the game sees a frozen cursor: GetCursorPos returns g_gameCursor, its SetCursorPos
+// recentering only updates g_gameCursor, its ClipCursor rect is remembered in g_gameClip. Closing the menu puts
+// the real cursor and clip back, so the game resumes with no delta. ImGui (render thread, and the WndProc handler
+// at t_imguiDepth > 0) always uses the real functions.
+static DWORD g_renderThread = 0;
+static thread_local int t_imguiDepth = 0;
+static POINT g_gameCursor{};
+static RECT g_gameClip{};
+static volatile bool g_gameClipped = false;
+static bool g_imguiOwnsCapture = false; // game thread only
 
 static ID3D11Device* g_device = nullptr;
 static ID3D11DeviceContext* g_context = nullptr;
@@ -67,10 +84,11 @@ static LRESULT CALLBACK Hooked_WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     if (menu && g_ready) {
         // ImGui's handler re-enters this procedure synchronously (ReleaseCapture sends WM_CAPTURECHANGED) and
         // SRW locks are not recursive: nested calls on this thread reuse the lock it already holds.
-        static thread_local int depth = 0;
-        if (depth++ == 0) AcquireSRWLockExclusive(&g_imguiLock);
+        if (t_imguiDepth++ == 0) AcquireSRWLockExclusive(&g_imguiLock);
+        const HWND captureBefore = GetCapture();
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
-        if (--depth == 0) ReleaseSRWLockExclusive(&g_imguiLock);
+        if (!captureBefore && GetCapture() == hwnd) g_imguiOwnsCapture = true; // ImGui took a free capture
+        if (--t_imguiDepth == 0) ReleaseSRWLockExclusive(&g_imguiLock);
     }
     if (capture) {
         switch (msg) {
@@ -94,14 +112,54 @@ static LRESULT CALLBACK Hooked_WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     return CallWindowProcW(o_WndProc, hwnd, msg, wp, lp);
 }
 
+static bool OurCall() { return t_imguiDepth > 0 || GetCurrentThreadId() == g_renderThread; }
+
 static BOOL WINAPI Hooked_SetCursorPos(int x, int y) {
-    if (g_menuOpen) return TRUE;
+    if (g_menuOpen && !OurCall()) { g_gameCursor = POINT{ x, y }; return TRUE; }
     return o_SetCursorPos(x, y);
 }
 
+static BOOL WINAPI Hooked_GetCursorPos(POINT* p) {
+    if (g_menuOpen && p && !OurCall()) { *p = g_gameCursor; return TRUE; }
+    return o_GetCursorPos(p);
+}
+
 static BOOL WINAPI Hooked_ClipCursor(const RECT* r) {
+    if (!OurCall()) {
+        if (r) g_gameClip = *r;
+        g_gameClipped = r != nullptr;
+    }
     if (g_menuOpen) return o_ClipCursor(nullptr);
     return o_ClipCursor(r);
+}
+
+// ImGui releases the capture on mouse-up even when it was the game's (UE captures the viewport): keep it.
+static BOOL WINAPI Hooked_ReleaseCapture() {
+    if (t_imguiDepth > 0) {
+        if (!g_imguiOwnsCapture) return TRUE;
+        g_imguiOwnsCapture = false;
+    }
+    return o_ReleaseCapture();
+}
+
+static SHORT WINAPI Hooked_GetAsyncKeyState(int vk) {
+    const bool mouseButton = vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
+    if (mouseButton && g_menuOpen && !OurCall()) return 0;
+    return o_GetAsyncKeyState(vk);
+}
+
+// Render thread, under g_imguiLock.
+static void SetMenuOpen(bool open) {
+    if (open == g_menuOpen) return;
+    if (open) {
+        o_GetCursorPos(&g_gameCursor); // what the game sees until the menu closes
+        g_menuOpen = true;
+        o_ClipCursor(nullptr);
+    } else {
+        g_menuOpen = false;
+        if (g_gameClipped) { const RECT r = g_gameClip; o_ClipCursor(&r); }
+        o_SetCursorPos(g_gameCursor.x, g_gameCursor.y);
+    }
 }
 
 // ---------------------------------------------------------------- frame
@@ -155,7 +213,7 @@ static void DrawMenu() {
         }
     }
     ImGui::End();
-    if (!open) g_menuOpen = false;
+    if (!open) SetMenuOpen(false);
 }
 
 static void RenderFrame(IDXGISwapChain* sc) {
@@ -165,13 +223,11 @@ static void RenderFrame(IDXGISwapChain* sc) {
         if (!g_ready) return;
     }
     if (sc != g_swapChain) return;
+    g_renderThread = GetCurrentThreadId();
     static bool menuKeyDown = false;
     const bool menuKey = HotkeyDown(g_cfg.keyMenu);
     AcquireSRWLockExclusive(&g_imguiLock);
-    if (menuKey && !menuKeyDown) {
-        g_menuOpen = !g_menuOpen;
-        if (g_menuOpen) o_ClipCursor(nullptr);
-    }
+    if (menuKey && !menuKeyDown) SetMenuOpen(!g_menuOpen);
     menuKeyDown = menuKey;
     ImGui::GetIO().MouseDrawCursor = g_menuOpen;
     ImGui_ImplDX11_NewFrame();
@@ -242,9 +298,14 @@ bool InstallOverlay() {
         ok = MH_CreateHook(present, (void*)&Hooked_Present, (void**)&o_Present) == MH_OK &&
              MH_CreateHook(resize, (void*)&Hooked_ResizeBuffers, (void**)&o_ResizeBuffers) == MH_OK &&
              MH_CreateHook((void*)&SetCursorPos, (void*)&Hooked_SetCursorPos, (void**)&o_SetCursorPos) == MH_OK &&
+             MH_CreateHook((void*)&GetCursorPos, (void*)&Hooked_GetCursorPos, (void**)&o_GetCursorPos) == MH_OK &&
              MH_CreateHook((void*)&ClipCursor, (void*)&Hooked_ClipCursor, (void**)&o_ClipCursor) == MH_OK &&
+             MH_CreateHook((void*)&ReleaseCapture, (void*)&Hooked_ReleaseCapture, (void**)&o_ReleaseCapture) == MH_OK &&
+             MH_CreateHook((void*)&GetAsyncKeyState, (void*)&Hooked_GetAsyncKeyState, (void**)&o_GetAsyncKeyState) == MH_OK &&
              MH_EnableHook(present) == MH_OK && MH_EnableHook(resize) == MH_OK &&
-             MH_EnableHook((void*)&SetCursorPos) == MH_OK && MH_EnableHook((void*)&ClipCursor) == MH_OK;
+             MH_EnableHook((void*)&SetCursorPos) == MH_OK && MH_EnableHook((void*)&GetCursorPos) == MH_OK &&
+             MH_EnableHook((void*)&ClipCursor) == MH_OK && MH_EnableHook((void*)&ReleaseCapture) == MH_OK &&
+             MH_EnableHook((void*)&GetAsyncKeyState) == MH_OK;
         Log(1, "overlay: Present=%p ResizeBuffers=%p hooks %s", present, resize, ok ? "installed" : "FAILED");
         sc->Release(); ctx->Release(); dev->Release();
     } else {
