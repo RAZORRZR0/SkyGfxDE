@@ -65,9 +65,12 @@ static LRESULT CALLBACK Hooked_WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         return DefWindowProcW(hwnd, msg, wp, lp); // keeps raw input from the game, cleans up the buffer
     }
     if (menu && g_ready) {
-        AcquireSRWLockExclusive(&g_imguiLock);
+        // ImGui's handler re-enters this procedure synchronously (ReleaseCapture sends WM_CAPTURECHANGED) and
+        // SRW locks are not recursive: nested calls on this thread reuse the lock it already holds.
+        static thread_local int depth = 0;
+        if (depth++ == 0) AcquireSRWLockExclusive(&g_imguiLock);
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp);
-        ReleaseSRWLockExclusive(&g_imguiLock);
+        if (--depth == 0) ReleaseSRWLockExclusive(&g_imguiLock);
     }
     if (capture) {
         switch (msg) {
