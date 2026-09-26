@@ -289,6 +289,8 @@ constexpr size_t IsInterior = 0x864;    // AGTAPostProcessVolume::bIsInteriorPos
 }
 namespace FOG { // AGTAHeightFog / UExponentialHeightFogComponent
 constexpr size_t Component = 0x2A8;     // AGTAHeightFog::HeightFogComponent
+constexpr size_t Tod = 0x2B0;           // AGTAHeightFog::TimeOfDayActor
+constexpr size_t InscatterColor = 0x20C; // component FogInscatteringColor (FLinearColor)
 constexpr size_t Density = 0x1F8;       // FogDensity (DE: FogParameters.x)
 constexpr size_t SecondDensity = 0x200; // SecondFogData.FogDensity (DE: fixed 0.02 ground layer)
 constexpr size_t UseGtaValues = 0x2A0;  // AGTAHeightFog::bUseGTAValues: DE's timecyc fog path (as in Classic)
@@ -557,6 +559,7 @@ static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
     // DE compares its new value with the component before writing; restore DE's values first so its
     // change detection keeps working, then apply ours.
     static float lastDeMain = -1.0f, lastDeSecond = -1.0f, lastMain = -1.0f, lastSecond = -1.0f;
+    static float lastDeCol[4] = { -1, -1, -1, -1 }, lastCol[4] = { -1, -1, -1, -1 };
     static uint8_t* deActor = nullptr;
     static uint8_t deUseGta = 0;
     const bool gtaFog = GtaFogOn();
@@ -570,6 +573,7 @@ static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
             *(float*)(comp + FOG::Density) = lastDeMain;
             *(float*)(comp + FOG::SecondDensity) = lastDeSecond;
         }
+        if (comp && !memcmp(comp + FOG::InscatterColor, lastCol, 16)) memcpy(comp + FOG::InscatterColor, lastDeCol, 16);
     } __except (EXCEPTION_EXECUTE_HANDLER) { comp = nullptr; }
     const uint8_t volSaved = g_volFogInClassic ? *g_volFogInClassic : 0;
     if (g_volFogInClassic && gtaFog) *g_volFogInClassic = 1;
@@ -596,11 +600,24 @@ static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
         const float wantSecond = gtaOn || modernOn ? *second * g_cfg.groundHaze : *second;
         g_look.fogDensityApplied = wantMain;
         g_look.gtaFog = gtaFog;
-        if (wantMain != *density || wantSecond != *second) {
+        // GTA fog colour: DE's GTA path copies one static classic colour, which glows at night. Use the time-of-day
+        // sky fog colour instead, the way DE's modern path does (rgb x a, a^2), so it darkens with the clock.
+        float* col = (float*)(comp + FOG::InscatterColor);
+        memcpy(lastDeCol, col, 16);
+        float wantCol[4];
+        memcpy(wantCol, col, 16);
+        const uint8_t* tod = *(uint8_t**)(actor + FOG::Tod);
+        if (gtaOn && tod) {
+            const float* f = (const float*)(tod + TOD::LiveColors + SCS::Fog);
+            wantCol[0] = f[0] * f[3]; wantCol[1] = f[1] * f[3]; wantCol[2] = f[2] * f[3]; wantCol[3] = f[3] * f[3];
+        }
+        if (wantMain != *density || wantSecond != *second || memcmp(wantCol, col, 16)) {
             *density = wantMain;
             *second = wantSecond;
+            memcpy(col, wantCol, 16);
             g_MarkRenderStateDirty(comp);
         }
+        memcpy(lastCol, col, 16);
         lastMain = *density;
         lastSecond = *second;
     } __except (EXCEPTION_EXECUTE_HANDLER) {}

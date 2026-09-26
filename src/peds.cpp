@@ -22,12 +22,12 @@ static const char* const kParamNames[P_COUNT] = { "GlobalRoughness", "Roughness"
 static const bool kRoughness[P_COUNT] = { true, true, false };
 
 // Defaults from each master's cooked CachedExpressionData; NAN = the master has no such parameter.
-struct Master { const char* name; float def[P_COUNT]; int count; };
+struct Master { const char* name; float def[P_COUNT]; };
 static Master g_masters[] = {
-    { "M_Character_VGD",         { 0.5f, NAN, 0.02f }, 0 },
-    { "M_Character_Clothes_VGD", { NAN, 0.9f, 0.5f },  0 },
-    { "M_Character_Clothes",     { NAN, 0.9f, 0.5f },  0 },
-    { "M_Character_Hair_VGD",    { NAN, 0.3f, 1.0f },  0 },
+    { "M_Character_VGD",         { 0.5f, NAN, 0.02f } },
+    { "M_Character_Clothes_VGD", { NAN, 0.9f, 0.5f } },
+    { "M_Character_Clothes",     { NAN, 0.9f, 0.5f } },
+    { "M_Character_Hair_VGD",    { NAN, 0.3f, 1.0f } },
 };
 
 struct Tracked { uint8_t* obj; Master* master; float orig[P_COUNT]; float applied[P_COUNT]; };
@@ -170,64 +170,73 @@ static bool ResolveNames() {
     return ok;
 }
 
-static void Scan(float matte) {
-    const int32_t count = *(int32_t*)(g_objects + 0x14);
-    const int32_t fn = g_clsFunction, setName = g_nameSetScalar;
-    for (Master& m : g_masters) m.count = 0;
-    for (int32_t i = 0; i < count; ++i) {
-        uint8_t* item = ObjectItem(i);
-        uint8_t* obj = item ? *(uint8_t**)item : nullptr;
-        if (!obj || (*(int32_t*)(item + 8) & ((1 << 29) | (1 << 28)))) { g_tracked.erase(i); continue; }
-        const int32_t cls = ClassOf(obj);
-        if (!g_setScalar && cls == fn && NameOf(obj) == setName && NameIs(NameOf(*(uint8_t**)(obj + UO::Outer)), "MaterialInstanceDynamic"))
-            g_setScalar = obj;
-        if (cls != g_clsMIC && cls != g_clsMID) continue;
-        auto it = g_tracked.find(i);
-        if (it != g_tracked.end() && it->second.obj == obj) {
-            // Our value gone (instance reloaded, or the game set it): take the game's value as the new original.
-            Tracked& t = it->second;
-            for (int p = 0; p < P_COUNT; ++p) {
-                float v;
-                if (!isnan(t.applied[p]) && (!OwnScalar(obj, g_param[p], &v) || v != t.applied[p])) {
-                    t.orig[p] = GameValue(*(uint8_t**)(obj + MI::Parent), p, t.master);
-                    if (OwnScalar(obj, g_param[p], &v)) t.orig[p] = v;
-                    t.applied[p] = NAN;
-                }
-            }
-            ++t.master->count;
-            continue;
-        }
+// Tracked instance still in its GObjects slot and not PendingKill/Unreachable.
+static bool LiveAt(int32_t i, const uint8_t* obj) {
+    uint8_t* item = ObjectItem(i);
+    return item && *(uint8_t**)item == obj && !(*(int32_t*)(item + 8) & ((1 << 29) | (1 << 28)));
+}
+
+// One GObjects slot: drop a dead entry, track a new character instance, catch values the game changed.
+static void Visit(int32_t i, float matte) {
+    auto it = g_tracked.find(i);
+    if (it != g_tracked.end() && !LiveAt(i, it->second.obj)) { g_tracked.erase(it); it = g_tracked.end(); }
+    uint8_t* item = ObjectItem(i);
+    uint8_t* obj = item ? *(uint8_t**)item : nullptr;
+    if (!obj || (*(int32_t*)(item + 8) & ((1 << 29) | (1 << 28)))) return;
+    const int32_t cls = ClassOf(obj);
+    if (!g_setScalar && cls == g_clsFunction && NameOf(obj) == g_nameSetScalar &&
+        NameIs(NameOf(*(uint8_t**)(obj + UO::Outer)), "MaterialInstanceDynamic"))
+        g_setScalar = obj;
+    if (cls != g_clsMIC && cls != g_clsMID) return;
+    if (it == g_tracked.end()) {
         Master* m = MasterOf(obj);
-        if (!m) { if (it != g_tracked.end()) g_tracked.erase(it); continue; }
+        if (!m) return;
         Tracked t{ obj, m, {}, { NAN, NAN, NAN } };
         for (int p = 0; p < P_COUNT; ++p) t.orig[p] = isnan(m->def[p]) ? NAN : GameValue(obj, p, m);
-        g_tracked[i] = t;
-        ++m->count;
+        it = g_tracked.emplace(i, t).first;
+    } else {
+        // Our value gone (instance reloaded, or the game set it): take the game's value as the new original.
+        Tracked& t = it->second;
+        for (int p = 0; p < P_COUNT; ++p) {
+            float v;
+            if (!isnan(t.applied[p]) && (!OwnScalar(obj, g_param[p], &v) || v != t.applied[p])) {
+                t.orig[p] = OwnScalar(obj, g_param[p], &v) ? v : GameValue(*(uint8_t**)(obj + MI::Parent), p, t.master);
+                t.applied[p] = NAN;
+            }
+        }
     }
-    if (!g_setScalar) return;
-    for (auto& kv : g_tracked) Apply(kv.second, matte);
+    if (g_setScalar) Apply(it->second, matte);
 }
+
+static volatile int g_trackedCount = 0; // for the panel (render thread)
 
 void PedsFrame() {
     if (!g_pedsOk) return;
-    static int frame = 0;
     static bool disabled = false;
-    const float matte = g_active ? g_cfg.pedMatte : 0.0f;
-    if (disabled || (++frame % 60 != 0 && matte == g_appliedMatte)) return;
+    static int32_t cursor = 0, frame = 0;
+    if (disabled) return;
     if (!OnGameThread()) {
         disabled = true;
         Log(1, "characters: look hook is not on the game thread, matte characters disabled");
         return;
     }
-    if (!ResolveNames()) return; // masters not loaded yet
-    const int before = g_pedSets;
-    Scan(matte);
-    if (!g_setScalar) { static bool logged = false; if (!logged) Log(1, "characters: SetScalarParameterValue not found yet"); logged = true; return; }
-    if (matte != g_appliedMatte || g_pedSets != before)
-        Log(1, "characters: matte %.2f, %d instances (skin %d, clothes %d+%d, hair %d), %d parameter sets", matte,
-            g_masters[0].count + g_masters[1].count + g_masters[2].count + g_masters[3].count, g_masters[0].count,
-            g_masters[1].count, g_masters[2].count, g_masters[3].count, g_pedSets - before);
-    g_appliedMatte = matte;
+    if (g_param[P_GLOBALROUGH] < 0 && ++frame % 120 != 0) return; // name pool walk only every 120 frames until loaded
+    if (!ResolveNames()) return;
+    const float matte = g_active ? g_cfg.pedMatte : 0.0f;
+    if (matte != g_appliedMatte && g_setScalar) {
+        const int before = g_pedSets;
+        for (auto& kv : g_tracked)
+            if (LiveAt(kv.first, kv.second.obj)) Apply(kv.second, matte);
+        Log(1, "characters: matte %.2f, %d instances, %d parameter sets", matte, (int)g_tracked.size(), g_pedSets - before);
+        g_appliedMatte = matte;
+    }
+    // ponytail: fixed 4096 GObjects slots per frame (full pass ~100 frames); budget by time if the table grows a lot.
+    const int32_t count = *(int32_t*)(g_objects + 0x14);
+    for (int n = 0; n < 4096 && count > 0; ++n) {
+        if (cursor >= count) cursor = 0;
+        Visit(cursor++, matte);
+    }
+    g_trackedCount = (int)g_tracked.size();
 }
 
 bool InstallPeds() {
@@ -244,6 +253,5 @@ void PedsPanel() {
     if (!g_pedsOk) { ImGui::TextDisabled("unavailable on this build"); return; }
     ImGui::SliderFloat("Matte", &g_cfg.pedMatte, 0.0f, 1.0f);
     ImGui::TextDisabled("roughness -> 1 and specular x(1 - matte) on skin, clothes and hair");
-    ImGui::Text("%d instances: skin %d, clothes %d, hair %d", g_masters[0].count + g_masters[1].count + g_masters[2].count + g_masters[3].count, g_masters[0].count,
-                g_masters[1].count + g_masters[2].count, g_masters[3].count);
+    ImGui::Text("%d character material instances", g_trackedCount);
 }
