@@ -114,6 +114,7 @@ void ReadIni() {
     c.groundHaze          = Clamp(IniFloat("Atmosphere", "GroundHaze", 0.0f), 0.0f, 2.0f);
     c.gtaFog              = GetPrivateProfileIntA("Atmosphere", "GtaFog", 1, ini) != 0;
     c.fogDistance         = Clamp(IniFloat("Atmosphere", "FogDistance", 1.8f), 0.5f, 5.0f);
+    c.fogOpacity          = Clamp(IniFloat("Atmosphere", "FogOpacity", 0.5f), 0.05f, 0.95f);
     c.shadowDarkness      = Clamp(IniFloat("Shadows", "Darkness", 0.5f), 0.0f, 0.9f);
     c.pedMatte            = Clamp(IniFloat("Characters", "Matte", 0.6f), 0.0f, 1.0f);
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 1.0f, 500.0f);
@@ -147,6 +148,7 @@ bool SaveIni() {
     PutFloat("Atmosphere", "GroundHaze", c.groundHaze);
     WritePrivateProfileStringA("Atmosphere", "GtaFog", c.gtaFog ? "1" : "0", g_iniPath);
     PutFloat("Atmosphere", "FogDistance", c.fogDistance);
+    PutFloat("Atmosphere", "FogOpacity", c.fogOpacity);
     PutFloat("Shadows", "Darkness", c.shadowDarkness);
     PutFloat("Characters", "Matte", c.pedMatte);
     PutFloat("Tools", "FreecamSpeed", c.freecamSpeed);
@@ -270,8 +272,10 @@ namespace TOD { // AGTATimeOfDay
 constexpr size_t LiveColors = 0x2B8;    // SkyColorSet (used by the renderer)
 constexpr size_t TargetColors = 0x458;  // written by CTimeCycle::Update, copied to LiveColors
 constexpr size_t OfSingleton = 0x688;   // AGTATimeOfDay* in DE's engine singleton
-constexpr size_t GtaFogStart = 0x37E8, GtaFarClip = 0x37EC; // cm, written by CTimeCycle::Update (timecyc x 100)
+constexpr size_t VgdOverrideClass = 0x4770; // TSubclassOf<AVGDOverrideData>: DE's GTA fog StartDistance source
 }
+constexpr size_t UCLASS_CDO = 0x118;          // UClass::ClassDefaultObject
+constexpr size_t VGD_FogStartDistance = 0x220; // float StartDistance, then VolumetricFogExtinctionScale (sub_140B51860)
 namespace PP { // APostProcessVolume::Settings (FPostProcessSettings)
 constexpr size_t Settings = 0x260;
 constexpr size_t OverrideByte0 = 0x00;  // bit 2 ColorSaturation, bit 3 ColorContrast, bit 5 ColorGain
@@ -580,9 +584,16 @@ static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
         lastDeSecond = *second;
         g_look.fogDensityDE = *density;
         g_look.secondFogDE = *second;
-        const bool on = g_active && !classic && !gtaFog;
-        const float wantMain = on ? *density * g_cfg.haze : *density;
-        const float wantSecond = on ? *second * g_cfg.groundHaze : *second;
+        // GTA fog: DE's density follows a per-weather value more than the timecyc distances (too thick, deaf to
+        // FogDistance), so it is replaced. Clear up to StartDistance (half the scaled far clip, set in PerFrame), then
+        // FogOpacity reached at the scaled far clip. UE 4.26 height fog on a level ray: opacity = 1 - exp(-(ln 2)^2 *
+        // FogDensity / 1000 * cm). ponytail: level ray at fog height; the camera's height above the fog actor thins it.
+        const float rangeCm = (g_look.farClip - g_look.fogStart) * 100.0f;
+        const bool gtaOn = g_active && !classic && gtaFog && rangeCm > 0.0f;
+        const bool modernOn = g_active && !classic && !gtaFog;
+        const float wantMain = gtaOn ? -logf(1.0f - g_cfg.fogOpacity) * 1000.0f / (0.480453f * rangeCm)
+                             : modernOn ? *density * g_cfg.haze : *density;
+        const float wantSecond = gtaOn || modernOn ? *second * g_cfg.groundHaze : *second;
         g_look.fogDensityApplied = wantMain;
         g_look.gtaFog = gtaFog;
         if (wantMain != *density || wantSecond != *second) {
@@ -646,14 +657,21 @@ static void PerFrame() {
     const bool classic = g_classicFlag && *g_classicFlag;
     uint8_t* tod = *g_singleton ? *(uint8_t**)(*g_singleton + TOD::OfSingleton) : nullptr;
     if (g_active && tod && !classic) ApplyColours(tod, cc);
-    // Original fog: linear from FogStart to FarClip (gta-reversed app_game.cpp: far clip plane + RwCamera fogPlane).
-    // DE's GTA fog path reads them from the time-of-day actor in cm; rewritten here every frame, so no drift.
-    g_look.fogStart = *(const float*)(cc + CS::FogStart) * g_cfg.fogDistance;
+    // GTA fog: fog starts at half the scaled timecyc far clip. The original's fog started near 0 m (timecyc fog start
+    // median 10 m), too thick for DE's full-distance world. DE copies StartDistance every frame from its fog override
+    // data (class default object + 0x220), so the value is written at that source; restored when GTA fog is off.
     g_look.farClip = *(const float*)(cc + CS::FarClip) * g_cfg.fogDistance;
-    if (tod && GtaFogOn()) {
-        *(float*)(tod + TOD::GtaFogStart) = g_look.fogStart * 100.0f;
-        *(float*)(tod + TOD::GtaFarClip) = g_look.farClip * 100.0f;
+    g_look.fogStart = g_look.farClip * 0.5f;
+    static float* startSrc = nullptr;
+    static float startDE = 0.0f;
+    uint8_t* vgdClass = tod ? *(uint8_t**)(tod + TOD::VgdOverrideClass) : nullptr;
+    float* src = vgdClass && *(uint8_t**)(vgdClass + UCLASS_CDO) ? (float*)(*(uint8_t**)(vgdClass + UCLASS_CDO) + VGD_FogStartDistance) : nullptr;
+    if (src != startSrc) {
+        if (startSrc) *startSrc = startDE;
+        startSrc = src;
+        if (src) startDE = *src;
     }
+    if (startSrc) *startSrc = GtaFogOn() ? g_look.fogStart * 100.0f : startDE;
 
     AcquireSRWLockExclusive(&g_lock);
     for (int i = 0; i < g_volumeCount;) {
@@ -816,7 +834,9 @@ void LookPanel() {
         ImGui::Checkbox("GTA fog (timecyc fog start / far clip)", &g_cfg.gtaFog);
         if (g_cfg.gtaFog) {
             ImGui::SliderFloat("Fog distance", &g_cfg.fogDistance, 0.5f, 5.0f, "x%.2f");
-            ImGui::Text("fog start %.0f m, far clip %.0f m   density %.5f", g_look.fogStart, g_look.farClip, g_look.fogDensityDE);
+            ImGui::SliderFloat("Fog at far clip", &g_cfg.fogOpacity, 0.05f, 0.95f, "%.2f");
+            ImGui::Text("clear to %.0f m, %.0f%% at %.0f m   density %.5f", g_look.fogStart, g_cfg.fogOpacity * 100.0f,
+                        g_look.farClip, g_look.fogDensityApplied);
         } else {
             ImGui::SliderFloat("Haze (height fog)", &g_cfg.haze, 0.0f, 2.0f);
             ImGui::SliderFloat("Ground haze", &g_cfg.groundHaze, 0.0f, 2.0f);

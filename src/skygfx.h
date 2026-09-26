@@ -31,8 +31,9 @@ struct Config {
     // atmosphere
     float haze = 0.35f;        // DE main height fog density / opacity multiplier (modern fog only)
     float groundHaze = 0.0f;   // DE's fixed second fog layer (0.02) multiplier (modern fog only)
-    bool  gtaFog = true;       // DE's own timecyc fog path (bUseGTAValues): fog start / far clip from the timecyc
-    float fogDistance = 1.8f;  // timecyc fog start / far clip multiplier (original PC draw distance slider max)
+    bool  gtaFog = true;       // fog from the timecyc far clip (DE's GTA fog path, bUseGTAValues), modern lighting kept
+    float fogDistance = 1.8f;  // timecyc far clip multiplier (original PC draw distance slider max)
+    float fogOpacity = 0.5f;   // GTA fog opacity at the scaled far clip; clear up to half of it
     // shadows
     float shadowDarkness = 0.5f;
     // characters: roughness towards 1, specular x(1 - matte) on DE's glossy ped materials
