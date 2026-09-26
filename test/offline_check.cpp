@@ -1,10 +1,13 @@
-// Real-binary check for SkyGfxDE: maps SanAndreas.exe, runs the plugin's Install() (all signatures, code-layout
-// checks, timecyc table verification, MinHook installation) and a timecyc.dat load into the mapped tables.
+// Real-binary check for SkyGfxDE: maps SanAndreas.exe, runs the plugin's own Install() (all look and tool
+// signatures, code-layout checks, timecyc table verification, MinHook installation) and a timecyc.dat load
+// into the mapped tables. Linked with core.cpp + tools.cpp (not dllmain.cpp / overlay.cpp).
 // Usage: offline_check.exe <SanAndreas.exe> <timecyc.dat> <result file>
-// The result file lists every resolved address and table checksum; two runs on the same inputs give the same file.
-#define SKYGFX_TEST
-#include "../src/dllmain.cpp"
+// The result file lists every resolved address and a table checksum; two runs on the same inputs give the same file.
+#include "../src/skygfx.h"
 #include <vector>
+#include "../minhook/MinHook.h"
+
+volatile bool g_menuOpen = false; // overlay.cpp is not linked
 
 static FILE* g_out = nullptr;
 static int g_failures = 0;
@@ -44,6 +47,16 @@ static uint32_t TableChecksum(const uint8_t* img) {
     return h;
 }
 
+// Expected tool addresses (IDA of the current build), checked against what InstallTools resolved.
+static const struct { const char* name; uint32_t rva; } kExpected[] = {
+    { "CWeather::Update", 0x12903B0 }, { "CClock::SetGameClock", 0x112B980 }, { "CWeather::FindWeatherTypesList", 0x1291330 },
+    { "FindPlayerEntity", 0x116EE70 }, { "CCamera::Process", 0x111B2E0 }, { "CClock::Update tick", 0x1146764 },
+    { "CTimeCycle::Update", 0x1182230 }, { "Minutes", 0x521270F }, { "Seconds", 0x522A584 }, { "NewWeatherType", 0x52FFFF0 },
+    { "ForcedWeatherType", 0x5300018 }, { "OldWeatherType", 0x5300000 }, { "InterpolationValue", 0x52FFFE8 },
+    { "TimeInMilliseconds", 0x52397F8 }, { "Hours", 0x521270B }, { "LastClockTick", 0x522A58C }, { "WeatherRegion", 0x5300048 },
+    { "MsPerGameMinute", 0x522AD00 }, { "TheCamera.m_matrix", 0x53E13F8 },
+};
+
 int main(int argc, char** argv) {
     if (argc < 4) { printf("usage: offline_check <SanAndreas.exe> <timecyc.dat> <result file>\n"); return 2; }
     if (fopen_s(&g_out, argv[3], "w") != 0 || !g_out) return 2;
@@ -53,7 +66,7 @@ int main(int argc, char** argv) {
     Check(img != nullptr, "exe mapped");
     if (!img) return 1;
     g_moduleBase = img;
-    Check(Install(), "Install(): signatures, code layout, hooks");
+    Check(Install(), "Install(): look + tools signatures, code layout, hooks");
     fprintf(g_out, "m_CurrentColours rva=0x%llX\n", (unsigned long long)(g_curColours - img));
     fprintf(g_out, "engine singleton rva=0x%llX\n", (unsigned long long)((uint8_t*)g_singleton - img));
     fprintf(g_out, "classic flag rva=0x%llX\n", (unsigned long long)(g_classicFlag - img));
@@ -64,7 +77,28 @@ int main(int argc, char** argv) {
     Check(g_objects == img + 0x5086380, "GObjects = 0x145086380");
     Check(g_timecycTableOk, "timecyc table RVAs all read by CColourSet::CColourSet");
 
-    // Load a timecyc.dat into the mapped tables and spot-check against the file's first line (weather 0, hour 0).
+    // Tool addresses: every one resolved and equal to the IDA value.
+    char buf[8192] = {};
+    FILE* mem = nullptr;
+    char tmp[MAX_PATH];
+    GetTempPathA(MAX_PATH, tmp);
+    strcat_s(tmp, "skygfx_anchors.txt");
+    if (fopen_s(&mem, tmp, "w+") == 0 && mem) {
+        ToolsWriteAnchors(mem);
+        rewind(mem);
+        buf[fread(buf, 1, sizeof(buf) - 1, mem)] = '\0';
+        fclose(mem);
+        DeleteFileA(tmp);
+    }
+    fputs(buf, g_out);
+    for (const auto& e : kExpected) {
+        char want[96], msg[128];
+        snprintf(want, sizeof(want), "%-32s rva=0x%X\n", e.name, e.rva);
+        snprintf(msg, sizeof(msg), "tool anchor %s at 0x%X", e.name, e.rva);
+        Check(strstr(buf, want) != nullptr, msg);
+    }
+
+    // Load a timecyc.dat into the mapped tables and spot-check against the file's first data line (weather 0, hour 0).
     Check(LoadTimecycFile(argv[2]), "timecyc.dat loaded into the tables");
     fprintf(g_out, "table checksum=0x%08X\n", TableChecksum(img));
     FILE* f = nullptr;

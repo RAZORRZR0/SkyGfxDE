@@ -1,5 +1,5 @@
 ok   exe mapped
-ok   Install(): signatures, code layout, hooks
+ok   Install(): look + tools signatures, code layout, hooks
 m_CurrentColours rva=0x5067020
 engine singleton rva=0x5724750
 classic flag rva=0x5024151
@@ -9,6 +9,44 @@ ok   engine singleton = qword_145724750
 ok   Classic Atmosphere flag = byte_145024151
 ok   GObjects = 0x145086380
 ok   timecyc table RVAs all read by CColourSet::CColourSet
+CWeather::Update                 rva=0x12903B0
+CClock::SetGameClock             rva=0x112B980
+CWeather::FindWeatherTypesList   rva=0x1291330
+FindPlayerEntity                 rva=0x116EE70
+CCamera::Process                 rva=0x111B2E0
+CClock::Update tick              rva=0x1146764
+CTimeCycle::Update               rva=0x1182230
+Minutes                          rva=0x521270F
+Seconds                          rva=0x522A584
+NewWeatherType                   rva=0x52FFFF0
+ForcedWeatherType                rva=0x5300018
+OldWeatherType                   rva=0x5300000
+InterpolationValue               rva=0x52FFFE8
+TimeInMilliseconds               rva=0x52397F8
+Hours                            rva=0x521270B
+LastClockTick                    rva=0x522A58C
+WeatherRegion                    rva=0x5300048
+MsPerGameMinute                  rva=0x522AD00
+TheCamera.m_matrix               rva=0x53E13F8
+ok   tool anchor CWeather::Update at 0x12903B0
+ok   tool anchor CClock::SetGameClock at 0x112B980
+ok   tool anchor CWeather::FindWeatherTypesList at 0x1291330
+ok   tool anchor FindPlayerEntity at 0x116EE70
+ok   tool anchor CCamera::Process at 0x111B2E0
+ok   tool anchor CClock::Update tick at 0x1146764
+ok   tool anchor CTimeCycle::Update at 0x1182230
+ok   tool anchor Minutes at 0x521270F
+ok   tool anchor Seconds at 0x522A584
+ok   tool anchor NewWeatherType at 0x52FFFF0
+ok   tool anchor ForcedWeatherType at 0x5300018
+ok   tool anchor OldWeatherType at 0x5300000
+ok   tool anchor InterpolationValue at 0x52FFFE8
+ok   tool anchor TimeInMilliseconds at 0x52397F8
+ok   tool anchor Hours at 0x521270B
+ok   tool anchor LastClockTick at 0x522A58C
+ok   tool anchor WeatherRegion at 0x5300048
+ok   tool anchor MsPerGameMinute at 0x522AD00
+ok   tool anchor TheCamera.m_matrix at 0x53E13F8
 ok   timecyc.dat loaded into the tables
 table checksum=0x63A2CAE7
 ok   midnight/weather 0 ambient matches the file

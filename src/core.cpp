@@ -663,7 +663,6 @@ static void GuardedFrame(void (*fn)(), const char* what) {
 }
 
 static uintptr_t Hooked_TimeCycleUpdate(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d) {
-    GuardedFrame(ToolsGameFrame, "tools");      // before: forced weather/time feed this frame's colours
     const uintptr_t r = o_TimeCycleUpdate(a, b, c, d);
     GuardedFrame(PerFrame, "look");
     return r;

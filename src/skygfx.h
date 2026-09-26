@@ -92,9 +92,10 @@ constexpr int kHours = 8, kWeathers = 23;
 
 // ---------------------------------------------------------------- tools (tools.cpp)
 extern const char* const kWeatherNames[kWeathers];
-void ToolsGameFrame();                 // game thread, once per frame (from the CTimeCycle::Update hook)
+bool GameWindowFocused();             // core.cpp: the game window is the foreground window
 void ToolsPanel();                     // render thread, inside ImGui frame
 bool ToolsWantCapture();               // freecam/noclip active: keep keyboard/mouse away from the game
+void ToolsWriteAnchors(FILE* f);       // resolved addresses as "name rva" lines (offline check artifact)
 void ToolsAddMouseDelta(long dx, long dy);
 void ToolsAddWheel(int notches);
 void ToolsToggleFreecam();
