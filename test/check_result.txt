@@ -1,0 +1,16 @@
+ok   exe mapped
+ok   Install(): signatures, code layout, hooks
+m_CurrentColours rva=0x5067020
+engine singleton rva=0x5724750
+classic flag rva=0x5024151
+GObjects rva=0x5086380
+ok   m_CurrentColours = CTimeCycle::Update's lea rdx target (0x145067020)
+ok   engine singleton = qword_145724750
+ok   Classic Atmosphere flag = byte_145024151
+ok   GObjects = 0x145086380
+ok   timecyc table RVAs all read by CColourSet::CColourSet
+ok   timecyc.dat loaded into the tables
+table checksum=0x63A2CAE7
+ok   midnight/weather 0 ambient matches the file
+ok   sky top/bottom red match the file
+ALL PASSED
