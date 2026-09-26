@@ -11,6 +11,8 @@ ok   GObjects = 0x145086380
 ok   timecyc table RVAs all read by CColourSet::CColourSet
 FNamePool rva=0x570CDC0
 ok   FNamePool = stru_14570CDC0 (lea rdx in the name-entry accessor)
+ShowVolumeFogInClassic rva=0x5724FDC
+ok   gta.ShowVolumeFogInClassic = byte_145724FDC (AGTAHeightFog::UpdateColors+0x84)
 CWeather::Update                 rva=0x12903B0
 CClock::SetGameClock             rva=0x112B980
 CWeather::FindWeatherTypesList   rva=0x1291330

@@ -78,6 +78,8 @@ int main(int argc, char** argv) {
     Check(g_timecycTableOk, "timecyc table RVAs all read by CColourSet::CColourSet");
     fprintf(g_out, "FNamePool rva=0x%llX\n", (unsigned long long)(g_namePool - img));
     Check(g_namePool == img + 0x570CDC0, "FNamePool = stru_14570CDC0 (lea rdx in the name-entry accessor)");
+    fprintf(g_out, "ShowVolumeFogInClassic rva=0x%llX\n", (unsigned long long)(g_volFogInClassic - img));
+    Check(g_volFogInClassic == img + 0x5724FDC, "gta.ShowVolumeFogInClassic = byte_145724FDC (AGTAHeightFog::UpdateColors+0x84)");
 
     // Tool addresses: every one resolved and equal to the IDA value.
     char buf[8192] = {};

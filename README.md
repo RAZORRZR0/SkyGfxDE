@@ -34,7 +34,9 @@ Every look setting can be changed live, and **Save to ini** writes the values ba
 
 - **PS2 colour filter.** Uses skygfx's `ColourFilter_PS2` formula (`gain = 2·postfx1 + 2·postfx2·min(1, 2·alpha2)`) on the timecyc postfx colours. The result is multiplied onto the `ColorGain` of every `AGTAPostProcessVolume`, so the brightness option keeps working. With the game's own timecyc (PC/mobile-style postfx values), it is applied as a tint only at `GameTimecycStrength`. A PS2 `timecyc.dat` set in `[Timecyc] File` gets the full filter.
 - **Grade.** Saturation and contrast multipliers on DE's own values.
-- **Atmosphere.** Scales DE's height fog (`Haze`) and removes DE's extra fixed ground-haze layer (`GroundHaze`, a 0.02-density second fog that the original doesn't have). These are the main cause of the beige wash in DE compared with the PS2 look.
+- **Atmosphere.** Two modes:
+  - **GTA fog** (default). This is DE's own timecyc fog path, the one *Classic Atmosphere* uses, switched on with `AGTAHeightFog::bUseGTAValues` while the modern lighting stays. The world fades out between the timecyc fog start and far clip, as the original's linear RenderWare fog did (gta-reversed `app_game.cpp`: far clip plane and `fogPlane` from `CTimeCycle`). This hides the low-poly LOD world. `FogDistance` multiplies both distances; the default is 1.8, the original PC draw-distance slider at maximum. Volumetric fog stays on: the setting `gta.ShowVolumeFogInClassic` is held on for the fog update.
+  - **Modern fog** (`GtaFog=0`). `Haze` scales DE's height fog, and `GroundHaze` removes DE's extra fixed ground-haze layer (a 0.02-density second fog that the original doesn't have).
 - **Timecyc colours.** Sky top/bottom, fog, ambient, sun and cloud colours take the timecyc hue. DE's luminance is kept, so auto-exposure stays calibrated.
 - **Shadows.** The indirect fill that lights shadowed areas is lowered by `Darkness × timecyc shadow strength`. The sun's shadow maps are untouched, and interior volumes are skipped.
 - **Characters.** Makes peds matte. DE's character materials come from three glossy master materials:
@@ -86,6 +88,10 @@ Every address is found by signature. If a look signature doesn't match, nothing 
 | Classic Atmosphere flag | `byte_145024151` (`r.gta.UseLightingOverrides`), set by `0x140BB3F00` |
 | `AGTAPostProcessVolume::UpdateColorOptions` | `0x140B7DD90` |
 | `AGTAHeightFog::UpdateColors` | `0x140B65920` (component +0x2A8: FogDensity +0x1F8, SecondFogData.FogDensity +0x200) |
+| `ShouldUseGTAFog` | `0x140B65820`: true if `bUseGTAValues` (fog actor +0x2A0), `gta.overridefog` (`0x145724FD8`), or Classic + time-of-day `bAllowOverrides` |
+| GTA fog inputs | time-of-day +0x37E8 / +0x37EC = timecyc FogStart / FarClip × 100 (cm), written by `CTimeCycle::Update`; `m_CurrentColours` +0x54 / +0x50 |
+| GTA fog density | `BaseFogDensity` (fog actor +0x29C) / max(5e-6·(far − start), 0.01) · (far − start) / far, blended with weather values |
+| `gta.ShowVolumeFogInClassic` | `0x145724FDC` (`UpdateColors+0x84`); without it the GTA path clears `bEnableVolumetricFog` (component +0x268) |
 | `UActorComponent::MarkRenderStateDirty` | `0x1431313B0` |
 | `CWeather::Update` | `0x1412903B0` |
 | `CWeather` Old / New / Forced (int16) | `0x145300000` / `0x1452FFFF0` / `0x145300018` (-1 = none) |
