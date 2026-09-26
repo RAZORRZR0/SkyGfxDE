@@ -113,6 +113,7 @@ void ReadIni() {
     c.haze                = Clamp(IniFloat("Atmosphere", "Haze", 0.35f), 0.0f, 2.0f);
     c.groundHaze          = Clamp(IniFloat("Atmosphere", "GroundHaze", 0.0f), 0.0f, 2.0f);
     c.shadowDarkness      = Clamp(IniFloat("Shadows", "Darkness", 0.5f), 0.0f, 0.9f);
+    c.pedMatte            = Clamp(IniFloat("Characters", "Matte", 0.6f), 0.0f, 1.0f);
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 1.0f, 500.0f);
     c.freecamSensitivity  = Clamp(IniFloat("Tools", "FreecamSensitivity", 0.15f), 0.01f, 2.0f);
     c.noclipSpeed         = Clamp(IniFloat("Tools", "NoclipSpeed", 15.0f), 1.0f, 500.0f);
@@ -143,6 +144,7 @@ bool SaveIni() {
     PutFloat("Atmosphere", "Haze", c.haze);
     PutFloat("Atmosphere", "GroundHaze", c.groundHaze);
     PutFloat("Shadows", "Darkness", c.shadowDarkness);
+    PutFloat("Characters", "Matte", c.pedMatte);
     PutFloat("Tools", "FreecamSpeed", c.freecamSpeed);
     PutFloat("Tools", "FreecamSensitivity", c.freecamSensitivity);
     PutFloat("Tools", "NoclipSpeed", c.noclipSpeed);
@@ -438,7 +440,7 @@ static SRWLOCK g_lock = SRWLOCK_INIT;
 static float g_gain[3] = { 1, 1, 1 };
 static float g_indirect = 1.0f;
 
-static uint8_t* ObjectItem(int32_t index) {
+uint8_t* ObjectItem(int32_t index) {
     if (!g_objects || index < 0) return nullptr;
     __try {
         if (index >= *(int32_t*)(g_objects + 0x14)) return nullptr;
@@ -665,6 +667,7 @@ static void GuardedFrame(void (*fn)(), const char* what) {
 static uintptr_t Hooked_TimeCycleUpdate(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d) {
     const uintptr_t r = o_TimeCycleUpdate(a, b, c, d);
     GuardedFrame(PerFrame, "look");
+    GuardedFrame(PedsFrame, "characters");
     return r;
 }
 
@@ -724,6 +727,7 @@ bool Install() {
          MH_CreateHook(fogUpdate, (void*)&Hooked_FogUpdateColors, (void**)&o_FogUpdateColors) == MH_OK;
     if (!ok) { Log(1, "hook creation failed"); MH_Uninitialize(); return false; }
     if (!InstallTools()) Log(1, "debug tools unavailable (see above); the look still works");
+    InstallPeds();
     if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {
         Log(1, "hook installation failed");
         MH_Uninitialize();
@@ -814,6 +818,7 @@ void LookPanel() {
         ImGui::SliderFloat("Darkness", &g_cfg.shadowDarkness, 0.0f, 0.9f);
         ImGui::Text("indirect light x%.2f  (%d post-process volumes)", g_look.indirect, g_look.volumes);
     }
+    if (ImGui::CollapsingHeader("Characters", ImGuiTreeNodeFlags_DefaultOpen)) PedsPanel();
     ImGui::Separator();
     if (ImGui::Button("Save to ini")) SaveIni();
     ImGui::SameLine();

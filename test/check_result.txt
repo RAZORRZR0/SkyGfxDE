@@ -9,6 +9,8 @@ ok   engine singleton = qword_145724750
 ok   Classic Atmosphere flag = byte_145024151
 ok   GObjects = 0x145086380
 ok   timecyc table RVAs all read by CColourSet::CColourSet
+FNamePool rva=0x570CDC0
+ok   FNamePool = stru_14570CDC0 (lea rdx in the name-entry accessor)
 CWeather::Update                 rva=0x12903B0
 CClock::SetGameClock             rva=0x112B980
 CWeather::FindWeatherTypesList   rva=0x1291330

@@ -37,6 +37,12 @@ Every look setting can be changed live, and **Save to ini** writes the values ba
 - **Atmosphere.** Scales DE's height fog (`Haze`) and removes DE's extra fixed ground-haze layer (`GroundHaze`, a 0.02-density second fog that the original doesn't have). These are the main cause of the beige wash in DE compared with the PS2 look.
 - **Timecyc colours.** Sky top/bottom, fog, ambient, sun and cloud colours take the timecyc hue. DE's luminance is kept, so auto-exposure stays calibrated.
 - **Shadows.** The indirect fill that lights shadowed areas is lowered by `Darkness × timecyc shadow strength`. The sun's shadow maps are untouched, and interior volumes are skipped.
+- **Characters.** Makes peds matte. DE's character materials come from three glossy master materials:
+  - skin, `M_Character_VGD`: `GlobalRoughness` 0.5, with a subsurface profile;
+  - clothes, `M_Character_Clothes_VGD`: `Roughness` 0.9 × texture, `Specular` 0.5;
+  - hair, `M_Character_Hair_VGD`: `Roughness` 0.3, `Specular` 1.0.
+  
+  Every loaded instance of those masters has its roughness pulled towards 1 and its specular multiplied by `1 − Matte`. Instances are rescanned every second as peds stream in. The change undoes itself when the look is toggled off. The redesigned shapes and textures of the DE character models themselves (the "cartoony" part) can only be changed by replacement models in a pak mod.
 
 Keep the in-game *Classic Atmosphere* option **off**. It destroys the volumetric clouds and swaps in Grove Street's override curves; with it on, only the filter, grade and shadows apply.
 
@@ -91,4 +97,8 @@ Every address is found by signature. If a look signature doesn't match, nothing 
 | `CTimer::m_snTimeInMilliseconds` | `0x1452397F8` |
 | `FindPlayerEntity` (vehicle if driving, else ped) | `0x14116EE70` (ped+0x634 bit 0x100 = in vehicle, vehicle at ped+0x7C8) |
 | `CCamera::Process` | `0x14111B2E0`; TheCamera at `0x1453E13E0`, `m_matrix` pointer `0x1453E13F8` |
+| `FNamePool` | `0x14570CDC0` (lea rdx in the name-entry accessor `0x141A7BFF0`) |
+| `UObject::ProcessEvent` | vtable slot `0x43` (`0x141C7B6B0`) |
+| `UMaterialInstance` | `Parent` +0xD0, `ScalarParameterValues` +0xE0 (stride 0x24, value +0x10), resource +0x140 |
+| `SetScalarParameterValueInternal` / `GameThread_UpdateMIParameter` | `0x1433AADD0` / `0x1433BC7B0` (native body of `MaterialInstanceDynamic:SetScalarParameterValue`, thunk `0x14389D3B0`) |
 | Timecyc tables | `[8 hours][23 weathers]` byte arrays, RVAs in `kTimecycCols` (`core.cpp`) |

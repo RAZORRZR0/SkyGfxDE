@@ -12,7 +12,7 @@ if not defined DevEnvDir (
 )
 if not exist "obj\test" mkdir "obj\test"
 cl.exe /nologo /O2 /W3 /MD /EHsc /std:c++20 /D_CRT_SECURE_NO_WARNINGS /Iminhook /Fo:obj\test\ /Fe:obj\test\offline_check.exe ^
-    test\offline_check.cpp src\core.cpp src\tools.cpp ^
+    test\offline_check.cpp src\core.cpp src\tools.cpp src\peds.cpp ^
     imgui\imgui.cpp imgui\imgui_draw.cpp imgui\imgui_tables.cpp imgui\imgui_widgets.cpp ^
     minhook\buffer.c minhook\hook.c minhook\trampoline.c minhook\hde\hde64.c user32.lib || exit /b 1
 obj\test\offline_check.exe %1 %2 test\check_result.txt

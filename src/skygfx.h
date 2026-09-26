@@ -33,6 +33,8 @@ struct Config {
     float groundHaze = 0.0f;   // DE's fixed second fog layer (0.02) multiplier
     // shadows
     float shadowDarkness = 0.5f;
+    // characters: roughness towards 1, specular x(1 - matte) on DE's glossy ped materials
+    float pedMatte = 0.6f;
     // timecyc
     char  timecycFile[MAX_PATH] = "";
     // tools
@@ -60,6 +62,7 @@ uint8_t* FindUnique(const char* pattern);
 uint8_t* RipAt(uint8_t* insn, const uint8_t* opcode, size_t opLen, size_t insnLen);
 bool Install();       // look hooks + tools hooks; false = unsupported build, nothing installed
 bool InstallTools();  // called by Install
+bool InstallPeds();   // called by Install
 
 // ---------------------------------------------------------------- look (core.cpp)
 extern bool g_active;             // effect on/off (toggle key / panel)
@@ -69,6 +72,10 @@ extern uint8_t* g_curColours;     // CTimeCycle::m_CurrentColours
 extern uint8_t** g_singleton;     // DE engine singleton
 extern uint8_t* g_classicFlag;
 extern uint8_t* g_objects;
+extern uint8_t* g_namePool;       // FNamePool
+uint8_t* ObjectItem(int32_t index); // GObjects slot (FUObjectItem) or nullptr
+void PedsFrame();                  // game thread, from the look hook
+void PedsPanel();                  // render thread, Look tab
 bool LoadTimecycFile(const char* path);
 void ApplyTimecycFile();
 

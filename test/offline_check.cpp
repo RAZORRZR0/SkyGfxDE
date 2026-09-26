@@ -76,6 +76,8 @@ int main(int argc, char** argv) {
     Check(g_classicFlag == img + 0x5024151, "Classic Atmosphere flag = byte_145024151");
     Check(g_objects == img + 0x5086380, "GObjects = 0x145086380");
     Check(g_timecycTableOk, "timecyc table RVAs all read by CColourSet::CColourSet");
+    fprintf(g_out, "FNamePool rva=0x%llX\n", (unsigned long long)(g_namePool - img));
+    Check(g_namePool == img + 0x570CDC0, "FNamePool = stru_14570CDC0 (lea rdx in the name-entry accessor)");
 
     // Tool addresses: every one resolved and equal to the IDA value.
     char buf[8192] = {};

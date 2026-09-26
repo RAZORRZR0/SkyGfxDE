@@ -23,7 +23,7 @@ if not defined DevEnvDir (
 if not exist "bin" mkdir "bin"
 if not exist "obj" mkdir "obj"
 cl.exe /nologo /O2 /W3 /MD /EHsc /std:c++20 /D_CRT_SECURE_NO_WARNINGS /Iminhook /Fo:obj\ ^
-    src\dllmain.cpp src\core.cpp src\overlay.cpp src\tools.cpp ^
+    src\dllmain.cpp src\core.cpp src\overlay.cpp src\tools.cpp src\peds.cpp ^
     imgui\imgui.cpp imgui\imgui_draw.cpp imgui\imgui_tables.cpp imgui\imgui_widgets.cpp imgui\imgui_impl_dx11.cpp imgui\imgui_impl_win32.cpp ^
     minhook\buffer.c minhook\hook.c minhook\trampoline.c minhook\hde\hde64.c ^
     /link /DLL /OUT:bin\SkyGfxDE.asi user32.lib d3d11.lib dxgi.lib
