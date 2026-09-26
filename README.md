@@ -1,55 +1,94 @@
 # SkyGfxDE
 
-x64 ASI plugin for **GTA San Andreas – The Definitive Edition** that brings back the PS2 look (in the spirit of [aap/skygfx](https://github.com/aap/skygfx)) on top of DE's modern renderer, so Unreal's dynamic shadows and volumetric clouds stay on.
+x64 ASI plugin for **GTA San Andreas – The Definitive Edition**. It brings back the PS2 look (in the spirit of [aap/skygfx](https://github.com/aap/skygfx)) on top of DE's modern renderer, so Unreal's dynamic shadows and volumetric clouds stay on. It also adds an in-game debug menu for weather, time, noclip and freecam.
 
-## Why not "Classic Atmosphere"?
+## Keys
 
-The in-game Classic Atmosphere option (`r.gta.UseLightingOverrides`) does not use the original timecyc. It swaps DE's sky curves for Grove Street's own override set (`AGTATimeOfDay::VGDOverrides`), destroys the volumetric cloud actor, spawns the old mesh clouds and fog, and clamps the sun colour. Meanwhile DE still runs the original RenderWare `CTimeCycle` every frame; the modern renderer just ignores most of it. This plugin feeds the timecyc back into the modern renderer.
+All defaults are Ctrl+Shift chords, so they work on 60% keyboards (no F-keys, arrows or numpad needed). You can rebind them under `[Keys]` in `SkyGfxDE.ini`.
 
-## What it does
+| Key | Action |
+|---|---|
+| Ctrl+Shift+M | Open/close the menu (World and Look tabs) |
+| Ctrl+Shift+E | Turn the look on/off (A/B comparison) |
+| Ctrl+Shift+R | Reload `SkyGfxDE.ini` |
+| Ctrl+Shift+F | Freecam |
+| Ctrl+Shift+N | Noclip |
 
-All changes are made every frame after DE's `CTimeCycle::Update`:
+In freecam and noclip: WASD moves, Space goes up, C goes down, the mouse looks around, Shift is ×5, Alt is ×0.2, and the mouse wheel changes freecam speed. While either is active, keyboard and mouse input is kept away from the game.
 
-1. **PS2 colour filter.** It uses skygfx's `ColourFilter_PS2` formula (`gain = 2·postfx1 + 2·postfx2·min(1, 2·alpha2)`) on the timecyc's postfx colours. The result is converted to linear and multiplied onto the `ColorGain` of every `AGTAPostProcessVolume`. DE writes that gain itself from the brightness option in `UpdateColorOptions`, so the plugin multiplies rather than replaces it, and brightness keeps working.
-2. **Timecyc colours.** Sky top/bottom, fog (sky bottom, as in the original), ambient/sky light, sun and volumetric-cloud colours take the timecyc hue. DE's luminance is kept, so auto-exposure and HDR stay calibrated.
-3. **Darker dynamic shadows.** `IndirectLightingIntensity`, the sky light and indirect fill that light shadowed areas, is lowered by `Darkness × timecyc shadow strength`. Shadows are therefore darkest at midday and softer at night or when overcast. The sun's shadow maps are untouched, and interior volumes are skipped.
-4. **Optional timecyc.dat.** A PS2 (or any) `timecyc.dat` can be loaded into DE's timecyc tables. Both 8-hour and 24-hour files work; for 24-hour files the hours of the game's 8 slots are used.
+## World tab (debug tools)
 
-With Classic Atmosphere on, only the filter and shadow parts apply. Keep it **off**.
+- **Weather.** Three modes:
+  - *Game*: the normal region cycle.
+  - *Force*: holds one of the 23 weathers.
+  - *Blend A → B*: sets the interpolation directly, to compare two weathers side by side.
+  
+  The panel also shows the current weather pair, the blend value, the forced weather and the region.
+- **Time.** Set hour and minute, jump to one of the 8 timecyc keyframes (00, 05, 06, 07, 12, 19, 20, 22), freeze the clock, or change clock speed (0.1× to 60×).
+- **Freecam.** Takes over TheCamera's final matrix after `CCamera::Process`, so you can compare weather at any height. The world streams around the **player**, so use *Move player to camera* before flying far.
+- **Noclip.** Moves the player, or their vehicle, along the camera heading with collision off. Collision is restored when you turn it off. If you turn it off high up, you will fall.
 
-### PS2 timecyc
+## Look tab
 
-skygfx's PS2 filter is designed for the **PS2 timecyc**. DE's own timecyc has PC/mobile-style postfx values (postfx2 alpha 255, strong colours). Applied at full strength, those turn the whole screen orange. So:
-- **Game timecyc (default):** the filter is applied as a tint only, at `GameTimecycStrength` (0.35).
-- **PS2 timecyc:** put the PS2 `timecyc.dat` next to the `.asi` and set `[Timecyc] File=timecyc.dat`. The filter then runs as configured (`Strength`, `KeepBrightness`). The PS2 file is not included; it comes from your PS2 copy of the game or from community packs.
+Every look setting can be changed live, and **Save to ini** writes the values back to the ini.
+
+- **PS2 colour filter.** Uses skygfx's `ColourFilter_PS2` formula (`gain = 2·postfx1 + 2·postfx2·min(1, 2·alpha2)`) on the timecyc postfx colours. The result is multiplied onto the `ColorGain` of every `AGTAPostProcessVolume`, so the brightness option keeps working. With the game's own timecyc (PC/mobile-style postfx values), it is applied as a tint only at `GameTimecycStrength`. A PS2 `timecyc.dat` set in `[Timecyc] File` gets the full filter.
+- **Grade.** Saturation and contrast multipliers on DE's own values.
+- **Atmosphere.** Scales DE's height fog (`Haze`) and removes DE's extra fixed ground-haze layer (`GroundHaze`, a 0.02-density second fog that the original doesn't have). These are the main cause of the beige wash in DE compared with the PS2 look.
+- **Timecyc colours.** Sky top/bottom, fog, ambient, sun and cloud colours take the timecyc hue. DE's luminance is kept, so auto-exposure stays calibrated.
+- **Shadows.** The indirect fill that lights shadowed areas is lowered by `Darkness × timecyc shadow strength`. The sun's shadow maps are untouched, and interior volumes are skipped.
+
+Keep the in-game *Classic Atmosphere* option **off**. It destroys the volumetric clouds and swaps in Grove Street's override curves; with it on, only the filter, grade and shadows apply.
+
+## Weather regions
+
+DE keeps all 23 weathers, and its five region weather lists (Countryside, LA, SF, Vegas, Desert; 64 entries each, at `0x145031DC0`–`0x145031ED0`) are **byte-identical** to the original game's (`Weather.def` in gta-reversed). Fog in SF, rain in SF/Countryside and sandstorms in the desert all still occur in their regions at the original rates.
 
 ## Install
 
-1. You need an ASI loader for DE (e.g. Ultimate ASI Loader as `version.dll` / `dxgi.dll` in `Gameface\Binaries\Win64`).
-2. Copy `bin\SkyGfxDE.asi` and `bin\SkyGfxDE.ini` to `<Game>\Gameface\Binaries\Win64\` while the game is closed (a running game locks the `.asi`).
-3. In game: **F10** toggles the effect for A/B comparison, and **F11** re-reads `SkyGfxDE.ini` so you can tune it live.
+1. You need an ASI loader for DE (e.g. Ultimate ASI Loader as `version.dll`/`dxgi.dll` in `Gameface\Binaries\Win64`).
+2. With the game closed (a running game locks the `.asi`), copy `bin\SkyGfxDE.asi` and `bin\SkyGfxDE.ini` to `<Game>\Gameface\Binaries\Win64\`.
 
-`SkyGfxDE.log` (next to the `.asi`) logs the hooks at startup, then every 10 s the current postfx colours, the applied gain, shadow strength, indirect intensity and the number of tracked volumes.
+`SkyGfxDE.log` (next to the `.asi`) logs every hook at startup. After that, every 10 s it logs the postfx colours, the applied gain, the shadow and indirect values, and the fog density (DE value → applied value).
 
-## Build
+## Build and check
 
-`build.bat` (VS 2022 x64 build tools) produces `bin\SkyGfxDE.asi`.
+- `build.bat` (VS 2022 x64 build tools) produces `bin\SkyGfxDE.asi`.
+- `test\run_check.bat <SanAndreas.exe> <timecyc.dat>` maps the real exe and runs the plugin's own `Install()`: every look and tool signature, the code-layout checks, the timecyc table verification and all hooks. It asserts all resolved addresses against the IDA values, loads the timecyc into the mapped tables, and writes `test\check_result.txt`. A second run on the same inputs produces an identical file.
 
-## Check against the real exe
+Every address is found by signature. If a look signature doesn't match, nothing is installed. If only a tool signature doesn't match, the look still works and the World tab says the tools are unavailable. Verified on the current Steam/RGL `SanAndreas.exe` (SHA-256 `ed7545eb…ac1f0`).
 
-`test\run_check.bat <SanAndreas.exe> <timecyc.dat>` maps the exe and runs the plugin's own `Install()`: all signatures, code-layout checks, timecyc table verification and hook installation. It then loads the timecyc file into the mapped tables. The results go to `test\check_result.txt`; repeated runs on the same inputs produce an identical file.
+## Source layout
 
-Every address is found by signature. If anything doesn't match, the plugin installs nothing and the game runs unmodded. Verified on the current Steam/RGL `SanAndreas.exe` (SHA-256 `ed7545eb…ac1f0`).
+| File | Contents |
+|---|---|
+| `src/core.cpp` | Config/ini, hotkeys, log, signature scanning, look hooks, Look tab |
+| `src/tools.cpp` | Weather/time/freecam/noclip hooks and World tab |
+| `src/overlay.cpp` | D3D11 Present/ResizeBuffers hooks, ImGui, input capture |
+| `src/dllmain.cpp` | Entry point; installs the overlay from a worker thread |
+| `imgui/` | Dear ImGui 1.92 (MIT) with DX11/Win32 backends |
 
 ## Reverse-engineering notes (DE x64)
 
 | What | Where |
 |---|---|
-| `CTimeCycle::Update` | `0x141182230` |
-| `CTimeCycle::Initialise` (TIMECYC.DAT) | `0x14114C250` |
-| `CColourSet::CColourSet` | `0x1411816B0`; RW layout 0xAC (PC), then an `FSkyColorSet` at +0xAC |
+| `CGame::Process` order | clock tick (inlined) → `CWeather::Update` → … → `CCamera::Process` (`sub_141146380`) |
+| `CTimeCycle::Update` / `Initialise` | `0x141182230` / `0x14114C250` |
+| `CColourSet::CColourSet` | `0x1411816B0` (RW layout 0xAC, then `FSkyColorSet` at +0xAC) |
 | `CTimeCycle::m_CurrentColours` | `0x145067020` |
 | `AGTATimeOfDay*` | `*(qword_145724750) + 0x688`; target colours +0x458, live colours +0x2B8 |
 | Classic Atmosphere flag | `byte_145024151` (`r.gta.UseLightingOverrides`), set by `0x140BB3F00` |
-| `AGTAPostProcessVolume::UpdateColorOptions` | `0x140B7DD90` (writes ColorSaturation/Contrast/Gamma/Gain) |
-| Timecyc tables | `[8 hours][23 weathers]` byte arrays, RVAs in `kTimecycCols`; postfx alphas stored as in the file, DirectionalMult forced to 1.28 |
+| `AGTAPostProcessVolume::UpdateColorOptions` | `0x140B7DD90` |
+| `AGTAHeightFog::UpdateColors` | `0x140B65920` (component +0x2A8: FogDensity +0x1F8, SecondFogData.FogDensity +0x200) |
+| `UActorComponent::MarkRenderStateDirty` | `0x1431313B0` |
+| `CWeather::Update` | `0x1412903B0` |
+| `CWeather` Old / New / Forced (int16) | `0x145300000` / `0x1452FFFF0` / `0x145300018` (-1 = none) |
+| `CWeather::InterpolationValue` / `WeatherRegion` | `0x1452FFFE8` (float) / `0x145300048` (int16) |
+| `CWeather::FindWeatherTypesList` | `0x141291330`; lists at `0x145031ED0` (default), `DC0` LA, `E00` SF, `E40` Vegas, `E80` Desert |
+| `CClock::SetGameClock(h, m, day)` | `0x14112B980` |
+| `CClock` hours / minutes / seconds | `0x14521270B` / `0x14521270F` / `0x14522A584` (uint16) |
+| `CClock` last tick / ms per game minute | `0x14522A58C` / `0x14522AD00` |
+| `CTimer::m_snTimeInMilliseconds` | `0x1452397F8` |
+| `FindPlayerEntity` (vehicle if driving, else ped) | `0x14116EE70` (ped+0x634 bit 0x100 = in vehicle, vehicle at ped+0x7C8) |
+| `CCamera::Process` | `0x14111B2E0`; TheCamera at `0x1453E13E0`, `m_matrix` pointer `0x1453E13F8` |
+| Timecyc tables | `[8 hours][23 weathers]` byte arrays, RVAs in `kTimecycCols` (`core.cpp`) |
