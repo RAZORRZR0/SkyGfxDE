@@ -57,6 +57,9 @@ static const struct { const char* name; uint32_t rva; } kExpected[] = {
     { "MsPerGameMinute", 0x522AD00 }, { "TheCamera.m_matrix", 0x53E13F8 },
     { "CWorld::PlayerInFocus", 0x521E79A }, { "CWorld::Players", 0x53EA730 },
     { "TimeCycle fog reduction", 0x11839DA }, { "CCutsceneMgr::ms_running", 0x5729449 },
+    { "CWeather::Rain", 0x531A1DC }, { "CWeather::UnderWaterness", 0x572AEE0 }, { "CGame::currArea", 0x572A450 },
+    { "CCullZones flags (player)", 0x5313544 }, { "CCullZones flags (camera)", 0x5313548 },
+    { "water_splash_big FX", 0xAE7C60 }, { "water_splash FX", 0xAE7E60 }, { "water_splsh_sml FX", 0xAE8020 },
 };
 
 int main(int argc, char** argv) {

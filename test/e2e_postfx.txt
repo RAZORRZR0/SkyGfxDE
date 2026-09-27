@@ -1,0 +1,5 @@
+PASS rain cheat raises CWeather::Rain
+PASS tools and splash hooks ready
+PASS post effects created
+PASS drawn before the HUD bind
+PASS no exceptions

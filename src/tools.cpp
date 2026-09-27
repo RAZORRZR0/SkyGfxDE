@@ -34,6 +34,13 @@ static uint8_t** g_camMatrix = nullptr;    // TheCamera.m_matrix (CMatrix*)
 static uint8_t** g_players = nullptr;      // CWorld::Players[].m_pPed, stride 0x1C0
 static uint8_t*  g_playerInFocus = nullptr; // CWorld::PlayerInFocus
 volatile int g_speedFxRow = -1;           // row of kSpeedFx for this frame, -1 = off (read by the overlay)
+static float*    g_rain = nullptr;         // CWeather::Rain
+static float*    g_underWater = nullptr;   // CWeather::UnderWaterness
+static int32_t*  g_currArea = nullptr;     // CGame::currArea (0 = outside)
+static uint32_t* g_zoneFlagsA = nullptr;   // CCullZones current flags (player / camera, as tested by CTimeCycle;
+static uint32_t* g_zoneFlagsB = nullptr;   //  both are only ever ORed): bit 3 = no rain
+FxState g_fx{};
+volatile int g_splash = -1;
 
 typedef uintptr_t (*Void_Fn)(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 typedef void (*SetGameClock_Fn)(uint8_t hours, uint8_t minutes, uint8_t day);
@@ -253,6 +260,7 @@ static void SpeedFxRowUpdate() {
     const uint8_t* ped = g_players[0x1C0 / 8 * *g_playerInFocus];
     const uint8_t* veh = ped && (*(const uint32_t*)(ped + 0x634) & 0x100) ? *(uint8_t* const*)(ped + 0x7C8) : nullptr;
     const uint32_t type = veh ? *(const uint32_t*)(veh + 0x890) : 0;
+    const bool cutscene = g_cutsceneRunning && *g_cutsceneRunning;
     if (g_cfg.speedFxTestMode && g_cfg.speedFx && g_active) {
         row = SpeedFxInputRow(1.0f); // m_bSpeedFXTestMode: SetSpeedFXManualSpeedCurrentFrame(1.0f), no vehicle needed
     } else if (veh && g_cfg.speedFx && g_active && (type < 3 || type > 6)) {
@@ -266,18 +274,59 @@ static void SpeedFxRowUpdate() {
                 nos = true;
             }
         }
-        if (!nos && !(g_cutsceneRunning && *g_cutsceneRunning))
+        if (!nos && !cutscene)
             row = SpeedFxInputRow(sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]));
     }
-    int look = 0;
-    if (row >= 0) {
-        const uint8_t* cam = (const uint8_t*)g_camMatrix - 0x18; // TheCamera
-        look = *(const uint32_t*)(cam + 0x1C4 + 0x1B8 * cam[0x5B]);
-    }
+    const uint8_t* cam = (const uint8_t*)g_camMatrix - 0x18; // TheCamera
+    const uint8_t active = cam[0x5B];
+    const uint32_t look = *(const uint32_t*)(cam + 0x1C4 + 0x1B8 * active);
+    const uint16_t mode = *(const uint16_t*)(cam + 0x1B0 + 0x1B8 * active); // m_aCams[m_nActiveCam].m_nMode
     static bool logged = false;
     if (row >= 0 && !logged) { logged = true; Log(1, "speedfx: first active (row %d, looking %d)", row, look); }
     g_speedFxRow = row < 0 ? -1 : row | (look == 1 || look == 2 ? look : 0) << 8;
+
+    // Post-effect inputs (postfx.cpp). Rain grain: CPostEffects::Render moves s_CurrentStrength one step per frame
+    // towards 128 * Rain and draws Grain(strength / 4) outside no-rain zones, above water, outside and below 900 m.
+    if (const float* m = (const float*)*g_camMatrix) memcpy(g_fx.cam, m, sizeof(g_fx.cam));
+    const float rain = *g_rain, under = *g_underWater;
+    const bool noRainZone = ((*g_zoneFlagsA | *g_zoneFlagsB) & 8) != 0;
+    static int strength = 0;
+    int grain = 0;
+    if (rain > 0.0f || strength != 0) {
+        if ((float)strength < 128.0f * rain) ++strength;
+        else if ((float)strength > 128.0f * rain) --strength;
+        if (strength < 0) strength = 0;
+        if (!noRainZone && under <= 0.0f && *g_currArea == 0 && g_fx.cam[14] <= 900.0f) grain = strength / 4;
+    }
+    g_fx.rain = rain;
+    g_fx.grain = grain;
+    // Water drops (skygfx WaterDrops::NoDrops / NoRain / CalculateMovement / Render); modes 1 and 54 are top-down,
+    // 16 is MODE_1STPERSON; looking behind/left/right from a 1st-person car (direction != 3, forward) stops them.
+    // ponytail: CEntryExitManager::ms_exitEnterState is not read, drops are not cleared on entry/exit fades.
+    g_fx.noDrops = under > 0.339731634f;
+    g_fx.noRain = noRainZone || *g_currArea != 0 || g_fx.noDrops;
+    g_fx.firstPerson = mode == 16;
+    g_fx.dropsEnabled = mode != 1 && mode != 54 && !(mode == 16 && veh && look != 3);
+    g_fx.hideDrops = cutscene || (mode == 16 && !veh);
 }
+
+// DE's water splash FX (Fx_c-style wrappers of "water_splash_big", "water_splash", "water_splsh_sml"; pos in metres):
+// skygfx hooks their CreateFxSystem calls with WaterDrops::RegisterSplash(point, 10.0f, 1).
+typedef void* (*SplashBig_Fn)(void*, const float*);
+typedef void* (*Splash_Fn)(void*, const float*, float);
+typedef void* (*SplashSmall_Fn)(void*, const float*, char);
+static SplashBig_Fn o_SplashBig = nullptr;
+static Splash_Fn o_Splash = nullptr;
+static SplashSmall_Fn o_SplashSmall = nullptr;
+static void RegisterSplash(const float* p) {
+    const float* c = g_fx.cam + 12;
+    if (!g_cfg.waterDrops || !p) return;
+    const float dx = p[0] - c[0], dy = p[1] - c[1], dz = p[2] - c[2];
+    if (dx * dx + dy * dy + dz * dz <= 10.0f * 10.0f) g_splash = 1;
+}
+static void* Hooked_SplashBig(void* a, const float* p) { RegisterSplash(p); return o_SplashBig(a, p); }
+static void* Hooked_Splash(void* a, const float* p, float s) { RegisterSplash(p); return o_Splash(a, p, s); }
+static void* Hooked_SplashSmall(void* a, const float* p, char s) { RegisterSplash(p); return o_SplashSmall(a, p, s); }
 
 static uintptr_t Hooked_CameraProcess(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d) {
     const uintptr_t r = o_CameraProcess(a, b, c, d);
@@ -371,7 +420,7 @@ void ToolsPanel() {
 
 // ---------------------------------------------------------------- install
 struct Anchor { const char* name; uint8_t* base; size_t off; const uint8_t* op; size_t opLen, len; void* out; };
-static struct { const char* name; const void* addr; } g_resolved[24];
+static struct { const char* name; const void* addr; } g_resolved[40];
 static int g_resolvedCount = 0;
 static void Resolved(const char* name, const void* addr) {
     if (g_resolvedCount < (int)(sizeof(g_resolved) / sizeof(g_resolved[0]))) g_resolved[g_resolvedCount++] = { name, addr };
@@ -409,7 +458,8 @@ bool InstallTools() {
                          movzxwEax[] = { 0x0F, 0xB7, 0x05 }, movWordDx[] = { 0x66, 0x89, 0x15 }, movssXmm7[] = { 0xF3, 0x0F, 0x11, 0x3D },
                          movEdi[] = { 0x8B, 0x3D }, movzxEsi[] = { 0x0F, 0xB6, 0x35 }, movMemEax[] = { 0x89, 0x05 },
                          movsxEcx[] = { 0x0F, 0xBF, 0x0D }, movR8d[] = { 0x44, 0x8B, 0x05 }, movRax[] = { 0x48, 0x8B, 0x05 },
-                         leaRcx[] = { 0x48, 0x8D, 0x0D }, cmpByte[] = { 0x80, 0x3D };
+                         leaRcx[] = { 0x48, 0x8D, 0x0D }, cmpByte[] = { 0x80, 0x3D }, movssStXmm9[] = { 0xF3, 0x44, 0x0F, 0x11, 0x0D },
+                         movssXmm0[] = { 0xF3, 0x0F, 0x10, 0x05 }, cmpDword[] = { 0x83, 0x3D }, testByte[] = { 0xF6, 0x05 };
     const Anchor anchors[] = {
         { "Minutes", wu, 0x5E, movzxEax, 3, 7, &g_minutes },
         { "Seconds", wu, 0x65, movzxEcx, 3, 7, &g_seconds },
@@ -426,6 +476,11 @@ bool InstallTools() {
         { "CWorld::PlayerInFocus", fpe, 0x0, movzxEax, 3, 7, &g_playerInFocus },
         { "CWorld::Players", fpe, 0x7, leaRcx, 3, 7, &g_players },
         { "CCutsceneMgr::ms_running", fr, 0x1B, cmpByte, 2, 7, &g_cutsceneRunning },
+        { "CWeather::Rain", wu, 0x451, movssStXmm9, 5, 9, &g_rain },           // rain from RAINY_SF / RAINY_COUNTRYSIDE
+        { "CWeather::UnderWaterness", wu, 0x1AE, movssXmm0, 4, 8, &g_underWater }, // lightning: ... || UnderWaterness > 0
+        { "CGame::currArea", wu, 0x1BF, cmpDword, 2, 7, &g_currArea },          //  ... || currArea != 0
+        { "CCullZones flags (player)", fr, 0x9, testByte, 2, 7, &g_zoneFlagsA },
+        { "CCullZones flags (camera)", fr, 0x12, testByte, 2, 7, &g_zoneFlagsB },
     };
     for (const Anchor& a : anchors) {
         uint8_t* p = RipAt(a.base + a.off, a.op, a.opLen, a.len);
@@ -439,6 +494,17 @@ bool InstallTools() {
     g_FindPlayerEntity = (FindPlayerEntity_Fn)fpe;
     ok = MH_CreateHook(wu, (void*)&Hooked_WeatherUpdate, (void**)&o_WeatherUpdate) == MH_OK &&
          MH_CreateHook(cp, (void*)&Hooked_CameraProcess, (void**)&o_CameraProcess) == MH_OK;
+    // Water splash FX for the lens drops: optional, rain drops work without them.
+    uint8_t* sb = FindUnique("48 8B C4 57 48 83 EC 70 F3 0F 10 19 48 8B FA F3 0F 59 1D ?? ?? ?? ?? F3 0F 10 51 04 F3 0F 59 15");
+    uint8_t* sp = FindUnique("4C 8B DC 49 89 4B 08 53 48 81 EC 80 00 00 00 48 8B 05 ?? ?? ?? ?? 49 89 7B 10 48 8B FA 45 0F 29 4B B8 44 0F 28 CA");
+    uint8_t* ss = FindUnique("48 8B C4 48 89 48 08 57 48 83 EC 70 F3 0F 10 1D ?? ?? ?? ?? 48 8B FA F3 0F 59 1D ?? ?? ?? ?? F3 0F 10 15");
+    if (sb) Resolved("water_splash_big FX", sb);
+    if (sp) Resolved("water_splash FX", sp);
+    if (ss) Resolved("water_splsh_sml FX", ss);
+    const bool splash = sb && sp && ss && MH_CreateHook(sb, (void*)&Hooked_SplashBig, (void**)&o_SplashBig) == MH_OK &&
+                        MH_CreateHook(sp, (void*)&Hooked_Splash, (void**)&o_Splash) == MH_OK &&
+                        MH_CreateHook(ss, (void*)&Hooked_SplashSmall, (void**)&o_SplashSmall) == MH_OK;
+    Log(1, "water drops: splash FX hooks %s", splash ? "ready" : "NOT found (rain drops only)");
     g_toolsOk = ok;
     Log(1, "debug tools %s", ok ? "ready" : "hook creation FAILED");
     return ok;

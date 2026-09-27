@@ -36,10 +36,15 @@ struct Config {
     float fogOpacity = 0.5f;   // GTA fog opacity at the scaled far clip; clear up to half of it
     // shadows
     float shadowDarkness = 0.5f;
-    // SpeedFX: the original's speed blur (CPostEffects::SpeedFX)
-    bool  speedFx = true;
+    // Post effects drawn by the overlay before the HUD (postfx.cpp)
+    bool  speedFx = true;          // CPostEffects::SpeedFX, the original's speed blur
     int   speedFxHudBind = 2;      // draw before the Nth backbuffer bind of a frame (the HUD's); 0 = at Present
     bool  speedFxTestMode = false; // CPostEffects::m_bSpeedFXTestMode: full effect (input 1.0) always
+    bool  radiosity = true;        // CPostEffects::Radiosity, PS2 highlight glow (limit = timecyc highlight column)
+    int   radiosityIntensity = 35; // m_RadiosityIntensity (gta_sa.exe 0x8D5118)
+    float deBloom = 0.0f;          // DE's BloomIntensity multiplier while radiosity is on (the PS2 had no bloom)
+    bool  grain = true;            // PS2 rain grain (CPostEffects::Render rain branch, skygfx Grain_PS2)
+    bool  waterDrops = true;       // skygfx neo water drops on the lens (rain, water splashes)
     // characters: roughness towards 1, specular x(1 - matte) on DE's glossy ped materials
     float pedMatte = 0.6f;
     // timecyc
@@ -56,7 +61,22 @@ struct SpeedFxRow { float speed; int passes, shift, wobble; };
 constexpr SpeedFxRow kSpeedFx[7] = { { 0.6f, 1, 4, 0 }, { 0.7f, 2, 4, 0 }, { 0.8f, 3, 4, 0 }, { 0.9f, 3, 4, 0 },
                                       { 0.93f, 4, 4, 1 }, { 0.96f, 4, 4, 2 }, { 1.0f, 5, 4, 3 } };
 constexpr int kSpeedFxAlpha = 36;
-extern volatile int g_speedFxRow; // tools.cpp (game thread) -> overlay.cpp (render thread)
+extern volatile int g_speedFxRow; // tools.cpp (game thread) -> postfx.cpp (render thread)
+
+// Game state for the post effects, written by the game thread once per frame after CCamera::Process, read by the
+// render thread (plain values; a torn read only affects one frame).
+struct FxState {
+    float cam[16];      // TheCamera matrix rows: right, forward, up, pos (x, y, z, pad)
+    float rain;         // CWeather::Rain
+    int   grain;        // PS2 grain alpha mask for this frame, 0 = none
+    bool  noRain;       // WaterDrops::NoRain: cull zone no-rain (camera or player), interior, or noDrops
+    bool  noDrops;      // WaterDrops::NoDrops: CWeather::UnderWaterness > 0.339731634
+    bool  dropsEnabled; // not a top-down camera, not looking around in a 1st-person car
+    bool  firstPerson;  // camera mode MODE_1STPERSON (16)
+    bool  hideDrops;    // cutscene, or 1st-person camera on foot
+};
+extern FxState g_fx;
+extern volatile int g_splash;  // WaterDrops::ms_splashDuration request from DE's water splash FX (game thread)
 extern char g_dir[MAX_PATH];
 extern char g_iniPath[MAX_PATH];
 
@@ -129,3 +149,9 @@ void ToolsToggleNoclip();
 bool InstallOverlay();                 // worker thread: finds IDXGISwapChain::Present via a dummy device
 extern volatile bool g_menuOpen;
 void LookPanel();                      // core.cpp: look settings tab
+
+// ---------------------------------------------------------------- post effects (postfx.cpp, render thread)
+struct ID3D11Device; struct ID3D11DeviceContext; struct IDXGISwapChain; struct ID3D11RenderTargetView;
+// Water drops, SpeedFX, radiosity and grain onto the backbuffer (rtv); the context state is saved and restored.
+void PostFxDraw(ID3D11Device* dev, ID3D11DeviceContext* ctx, IDXGISwapChain* sc, ID3D11RenderTargetView* rtv);
+void PostFxReleaseSized();             // before ResizeBuffers: drops the backbuffer-sized textures

@@ -119,6 +119,11 @@ void ReadIni() {
     c.speedFx             = GetPrivateProfileIntA("SpeedFX", "Enabled", 1, ini) != 0;
     c.speedFxHudBind      = GetPrivateProfileIntA("SpeedFX", "HudBind", 2, ini);
     c.speedFxTestMode     = GetPrivateProfileIntA("SpeedFX", "TestMode", 0, ini) != 0;
+    c.radiosity           = GetPrivateProfileIntA("Radiosity", "Enabled", 1, ini) != 0;
+    c.radiosityIntensity  = (int)Clamp((float)GetPrivateProfileIntA("Radiosity", "Intensity", 35, ini), 0.0f, 255.0f);
+    c.deBloom             = Clamp(IniFloat("Radiosity", "DEBloom", 0.0f), 0.0f, 1.0f);
+    c.grain               = GetPrivateProfileIntA("Grain", "Enabled", 1, ini) != 0;
+    c.waterDrops          = GetPrivateProfileIntA("WaterDrops", "Enabled", 1, ini) != 0;
     c.pedMatte            = Clamp(IniFloat("Characters", "Matte", 0.6f), 0.0f, 1.0f);
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 1.0f, 500.0f);
     c.freecamSensitivity  = Clamp(IniFloat("Tools", "FreecamSensitivity", 0.15f), 0.01f, 2.0f);
@@ -157,6 +162,12 @@ bool SaveIni() {
     char hb[8]; snprintf(hb, sizeof(hb), "%d", c.speedFxHudBind);
     WritePrivateProfileStringA("SpeedFX", "HudBind", hb, g_iniPath);
     WritePrivateProfileStringA("SpeedFX", "TestMode", c.speedFxTestMode ? "1" : "0", g_iniPath);
+    WritePrivateProfileStringA("Radiosity", "Enabled", c.radiosity ? "1" : "0", g_iniPath);
+    snprintf(hb, sizeof(hb), "%d", c.radiosityIntensity);
+    WritePrivateProfileStringA("Radiosity", "Intensity", hb, g_iniPath);
+    PutFloat("Radiosity", "DEBloom", c.deBloom);
+    WritePrivateProfileStringA("Grain", "Enabled", c.grain ? "1" : "0", g_iniPath);
+    WritePrivateProfileStringA("WaterDrops", "Enabled", c.waterDrops ? "1" : "0", g_iniPath);
     PutFloat("Characters", "Matte", c.pedMatte);
     PutFloat("Tools", "FreecamSpeed", c.freecamSpeed);
     PutFloat("Tools", "FreecamSensitivity", c.freecamSensitivity);
@@ -292,6 +303,9 @@ constexpr size_t OverrideByte16 = 0x16; // bit 0 = bOverride_IndirectLightingInt
 constexpr uint8_t IndirectBit = 0x01;
 constexpr size_t ColorSaturation = 0x30, ColorContrast = 0x40, ColorGain = 0x60; // FVector4
 constexpr size_t IndirectLightingIntensity = 0x464;
+constexpr size_t OverrideByte6 = 0x06;  // bit 2 = bOverride_BloomIntensity
+constexpr uint8_t BloomBit = 0x04;
+constexpr size_t BloomIntensity = 0x21C; // float, UE default 0.675
 constexpr size_t IsInterior = 0x864;    // AGTAPostProcessVolume::bIsInteriorPostProcess (outside Settings)
 }
 namespace FOG { // AGTAHeightFog / UExponentialHeightFogComponent
@@ -454,6 +468,7 @@ struct Volume {
     float deGain[4], deSat[4], deContrast[4]; // DE's own values (brightness/contrast options), after UpdateColorOptions
     uint8_t deOverride0;                       // DE's override bits in byte 0
     bool origIndirectOverride; float origIndirect;
+    bool origBloomOverride; float origBloom;
 };
 static Volume g_volumes[64];
 static int g_volumeCount = 0;
@@ -508,6 +523,16 @@ static void WriteVolume(Volume& v) {
         else s[PP::OverrideByte16] &= (uint8_t)~PP::IndirectBit;
         *indirect = v.origIndirect;
     }
+    // The PS2 had no bloom: radiosity is its glow, so DE's bloom is scaled by DEBloom while radiosity is on.
+    float* bloom = (float*)(s + PP::BloomIntensity);
+    if (on && g_cfg.radiosity) {
+        s[PP::OverrideByte6] |= PP::BloomBit;
+        *bloom = (v.origBloomOverride ? v.origBloom : 0.675f) * g_cfg.deBloom;
+    } else {
+        if (v.origBloomOverride) s[PP::OverrideByte6] |= PP::BloomBit;
+        else s[PP::OverrideByte6] &= (uint8_t)~PP::BloomBit;
+        *bloom = v.origBloom;
+    }
 }
 
 static Volume* TrackVolume(uint8_t* obj) {
@@ -521,6 +546,8 @@ static Volume* TrackVolume(uint8_t* obj) {
     v.obj = obj; v.index = index; v.serial = *(int32_t*)(item + 0x10);
     v.origIndirectOverride = (s[PP::OverrideByte16] & PP::IndirectBit) != 0;
     v.origIndirect = v.origIndirectOverride ? *(const float*)(s + PP::IndirectLightingIntensity) : 1.0f;
+    v.origBloomOverride = (s[PP::OverrideByte6] & PP::BloomBit) != 0;
+    v.origBloom = *(const float*)(s + PP::BloomIntensity);
     Log(1, "post-process volume %p tracked (%d total, interior=%d)", obj, g_volumeCount, obj[PP::IsInterior]);
     return &v;
 }
@@ -906,10 +933,19 @@ void LookPanel() {
         ImGui::Text("indirect light x%.2f  (%d post-process volumes)", g_look.indirect, g_look.volumes);
     }
     if (ImGui::CollapsingHeader("Characters", ImGuiTreeNodeFlags_DefaultOpen)) PedsPanel();
-    if (ImGui::CollapsingHeader("SpeedFX", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Post effects", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Checkbox("SpeedFX (original speed blur)", &g_cfg.speedFx);
         ImGui::SameLine();
         ImGui::Checkbox("Test mode", &g_cfg.speedFxTestMode);
+        ImGui::Checkbox("Radiosity (PS2 glow)", &g_cfg.radiosity);
+        ImGui::SameLine();
+        ImGui::Checkbox("Grain (rain)", &g_cfg.grain);
+        ImGui::SameLine();
+        ImGui::Checkbox("Water drops", &g_cfg.waterDrops);
+        ImGui::SliderInt("Radiosity intensity", &g_cfg.radiosityIntensity, 0, 255);
+        ImGui::SliderFloat("DE bloom (with radiosity)", &g_cfg.deBloom, 0.0f, 1.0f);
+        ImGui::Text("highlight limit %d, rain %.2f, grain mask %d", g_curColours ? *(const int32_t*)(g_curColours + 0x9C) : -1,
+                    g_fx.rain, g_fx.grain);
         ImGui::SliderInt("Before backbuffer bind", &g_cfg.speedFxHudBind, 0, 6);
         ImGui::TextDisabled("row %d, looking %d (0 = at Present, HUD blurred)", g_speedFxRow & 0xFF, g_speedFxRow < 0 ? 0 : g_speedFxRow >> 8);
     }

@@ -36,6 +36,14 @@ TheCamera.m_matrix               rva=0x53E13F8
 CWorld::PlayerInFocus            rva=0x521E79A
 CWorld::Players                  rva=0x53EA730
 CCutsceneMgr::ms_running         rva=0x5729449
+CWeather::Rain                   rva=0x531A1DC
+CWeather::UnderWaterness         rva=0x572AEE0
+CGame::currArea                  rva=0x572A450
+CCullZones flags (player)        rva=0x5313544
+CCullZones flags (camera)        rva=0x5313548
+water_splash_big FX              rva=0xAE7C60
+water_splash FX                  rva=0xAE7E60
+water_splsh_sml FX               rva=0xAE8020
 ok   tool anchor CWeather::Update at 0x12903B0
 ok   tool anchor CClock::SetGameClock at 0x112B980
 ok   tool anchor CWeather::FindWeatherTypesList at 0x1291330
@@ -59,6 +67,14 @@ ok   tool anchor CWorld::PlayerInFocus at 0x521E79A
 ok   tool anchor CWorld::Players at 0x53EA730
 ok   tool anchor TimeCycle fog reduction at 0x11839DA
 ok   tool anchor CCutsceneMgr::ms_running at 0x5729449
+ok   tool anchor CWeather::Rain at 0x531A1DC
+ok   tool anchor CWeather::UnderWaterness at 0x572AEE0
+ok   tool anchor CGame::currArea at 0x572A450
+ok   tool anchor CCullZones flags (player) at 0x5313544
+ok   tool anchor CCullZones flags (camera) at 0x5313548
+ok   tool anchor water_splash_big FX at 0xAE7C60
+ok   tool anchor water_splash FX at 0xAE7E60
+ok   tool anchor water_splsh_sml FX at 0xAE8020
 ok   timecyc.dat loaded into the tables
 table checksum=0x63A2CAE7
 ok   midnight/weather 0 ambient matches the file
