@@ -52,17 +52,21 @@ static bool g_ready = false;
 static bool g_notD3D11 = false;
 static SRWLOCK g_imguiLock = SRWLOCK_INIT;
 static char g_imguiIni[MAX_PATH];
+static ID3D11Resource* g_backRes = nullptr; // backbuffer texture (not referenced; lives with the swap chain)
+static bool g_fxDrawn = false;             // SpeedFX already drawn this frame (render thread)
 
 static void CreateRtv() {
     ID3D11Texture2D* back = nullptr;
     if (g_swapChain && SUCCEEDED(g_swapChain->GetBuffer(0, IID_PPV_ARGS(&back)))) {
         if (FAILED(g_device->CreateRenderTargetView(back, nullptr, &g_rtv))) g_rtv = nullptr;
+        g_backRes = back;
         back->Release();
     }
 }
 
 static void ReleaseRtv() {
     if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; }
+    g_backRes = nullptr;
 }
 
 // ---------------------------------------------------------------- SpeedFX (gta_sa.exe 1.0 US CPostEffects::SpeedFX, 0x7030A0)
@@ -123,8 +127,9 @@ static bool FxInit() {
 }
 
 static void SpeedFx() {
-    const int row = g_speedFxRow;
-    if (row < 0 || row > 6 || !g_rtv || !FxInit()) return;
+    const int packed = g_speedFxRow, row = packed & 0xFF, look = packed >> 8; // look: 1 behind, 2 sideways
+    // Looking behind, the original zeroes every UV offset: each pass redraws the frame onto itself, no visible change.
+    if (packed < 0 || row > 6 || look == 1 || !g_rtv || !FxInit()) return;
     ID3D11Texture2D* back = nullptr;
     if (FAILED(g_swapChain->GetBuffer(0, IID_PPV_ARGS(&back)))) return;
     D3D11_TEXTURE2D_DESC td;
@@ -178,17 +183,19 @@ static void SpeedFx() {
     g_context->PSSetSamplers(0, 1, &g_fxSampler);
 
     const SpeedFxRow& r = kSpeedFx[row];
+    const int shift = look ? r.shift / 2 : r.shift, wobble = look ? 0 : r.wobble; // integer halving, as in 0x7030A0
     const float u0 = 0, v0 = 0, u1 = 1, v1 = 1; // whole copy (the original's raster could be larger than the screen)
     float rx = 0, ry = 0;
-    if (r.wobble > 0) {
-        rx = (float)rand() * 0.000030518509f * (u1 * r.wobble * 0.004f);
-        ry = (float)rand() * 0.000030518509f * (v1 * r.wobble * 0.004f);
+    if (wobble > 0) {
+        rx = (float)rand() * 0.000030518509f * (u1 * wobble * 0.004f);
+        ry = (float)rand() * 0.000030518509f * (v1 * wobble * 0.004f);
     }
-    const float stepU = u1 * r.shift * 0.0025f, stepV = v1 * r.shift * 0.0025f;
+    const float stepU = u1 * shift * 0.0025f, stepV = v1 * shift * 0.0025f;
     for (int k = 1; k <= r.passes; ++k) {
-        const float s = stepU * k, t = stepV * k;
-        const float c[12] = { u0 + s + rx, v0 + t + ry, u1 - s - rx, v0 + t + ry,   // TL, TR
-                              u0 + s + rx, v1 - t - rx, u1 - s - rx, v1 - t - ry,   // BL, BR
+        // Sideways, the original keeps only the right-edge u offsets (TR, BR): a horizontal stretch from the left.
+        const float s = look ? 0 : stepU * k, t = look ? 0 : stepV * k, sr = stepU * k;
+        const float c[12] = { u0 + s + rx, v0 + t + ry, u1 - sr - rx, v0 + t + ry,  // TL, TR
+                              u0 + s + rx, v1 - t - rx, u1 - sr - rx, v1 - t - ry,  // BL, BR
                               kSpeedFxAlpha / 255.0f, 0, 0, 0 };
         D3D11_MAPPED_SUBRESOURCE m;
         if (FAILED(g_context->Map(g_fxCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) break;
@@ -403,7 +410,7 @@ static void RenderFrame(IDXGISwapChain* sc) {
     ImGui::Render();
     ReleaseSRWLockExclusive(&g_imguiLock);
 
-    SpeedFx(); // under the ImGui menu
+    if (!g_fxDrawn) SpeedFx(); // HudBind not reached this frame (or 0): draw at Present, under the ImGui menu
     ImDrawData* dd = ImGui::GetDrawData();
     if (dd && dd->CmdListsCount > 0 && g_rtv) {
         ID3D11RenderTargetView* prevRtv[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
@@ -417,13 +424,69 @@ static void RenderFrame(IDXGISwapChain* sc) {
     }
 }
 
+// ---------------------------------------------------------------- SpeedFX before the HUD
+// UE binds the backbuffer once for the final scene pass and again for Slate/UMG (the HUD). SpeedFX runs just before
+// backbuffer bind number [SpeedFX] HudBind of the frame, so the scene is complete and the HUD not drawn yet.
+// The binds per frame are logged once (600 frames) to calibrate HudBind; 0 = draw at Present (HUD blurred).
+typedef void(STDMETHODCALLTYPE* OMSetRT_Fn)(ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*, ID3D11DepthStencilView*);
+typedef void(STDMETHODCALLTYPE* OMSetRTUav_Fn)(ID3D11DeviceContext*, UINT, ID3D11RenderTargetView* const*, ID3D11DepthStencilView*,
+                                                UINT, UINT, ID3D11UnorderedAccessView* const*, const UINT*);
+static OMSetRT_Fn o_OMSetRenderTargets = nullptr;
+static OMSetRTUav_Fn o_OMSetRenderTargetsUav = nullptr;
+static thread_local bool t_ours = false; // our own binds (SpeedFX, ImGui) are not counted
+static int g_bbBinds = 0, g_bbBindsLast = 0;
+static ID3D11RenderTargetView* g_lastRtv = nullptr;
+static bool g_lastIsBack = false;
+
+static void OnBind(ID3D11DeviceContext* ctx, UINT n, ID3D11RenderTargetView* const* rtvs) {
+    if (t_ours || ctx != g_context || !g_ready || !g_backRes || n == 0 || n > 8 || !rtvs || !rtvs[0]) return;
+    if (rtvs[0] != g_lastRtv) {
+        ID3D11Resource* r = nullptr;
+        rtvs[0]->GetResource(&r);
+        g_lastRtv = rtvs[0];
+        g_lastIsBack = r == g_backRes;
+        if (r) r->Release();
+    }
+    if (!g_lastIsBack || ++g_bbBinds != g_cfg.speedFxHudBind || g_fxDrawn) return;
+    t_ours = true;
+    __try { SpeedFx(); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    t_ours = false;
+    g_fxDrawn = true;
+}
+
+static void STDMETHODCALLTYPE Hooked_OMSetRenderTargets(ID3D11DeviceContext* ctx, UINT n, ID3D11RenderTargetView* const* rtvs,
+                                                        ID3D11DepthStencilView* dsv) {
+    OnBind(ctx, n, rtvs);
+    o_OMSetRenderTargets(ctx, n, rtvs, dsv);
+}
+
+static void STDMETHODCALLTYPE Hooked_OMSetRenderTargetsUav(ID3D11DeviceContext* ctx, UINT n, ID3D11RenderTargetView* const* rtvs,
+                                                           ID3D11DepthStencilView* dsv, UINT slot, UINT nu,
+                                                           ID3D11UnorderedAccessView* const* uavs, const UINT* counts) {
+    if (n != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL) OnBind(ctx, n, rtvs);
+    o_OMSetRenderTargetsUav(ctx, n, rtvs, dsv, slot, nu, uavs, counts);
+}
+
 static HRESULT STDMETHODCALLTYPE Hooked_Present(IDXGISwapChain* sc, UINT sync, UINT flags) {
     if (!(flags & DXGI_PRESENT_TEST)) {
+        t_ours = true;
         __try {
             RenderFrame(sc);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             static int logged = 0;
             if (logged++ < 5) Log(1, "overlay: exception 0x%08lX in Present", GetExceptionCode());
+        }
+        t_ours = false;
+        if (sc == g_swapChain) {
+            static int hist[8], frames = 0;
+            ++hist[g_bbBinds < 7 ? g_bbBinds : 7];
+            if (++frames == 600)
+                Log(1, "speedfx: backbuffer binds per frame over 600 frames: 0:%d 1:%d 2:%d 3:%d 4:%d 5:%d 6:%d 7+:%d (HudBind=%d)",
+                    hist[0], hist[1], hist[2], hist[3], hist[4], hist[5], hist[6], hist[7], g_cfg.speedFxHudBind);
+            g_bbBindsLast = g_bbBinds;
+            g_bbBinds = 0;
+            g_fxDrawn = false;
+            g_lastRtv = nullptr;
         }
     }
     return o_Present(sc, sync, flags);
@@ -472,6 +535,12 @@ bool InstallOverlay() {
              MH_EnableHook((void*)&SetCursorPos) == MH_OK && MH_EnableHook((void*)&GetCursorPos) == MH_OK &&
              MH_EnableHook((void*)&ClipCursor) == MH_OK && MH_EnableHook((void*)&ReleaseCapture) == MH_OK &&
              MH_EnableHook((void*)&GetAsyncKeyState) == MH_OK;
+        // ID3D11DeviceContext::OMSetRenderTargets (33) / OMSetRenderTargetsAndUnorderedAccessViews (34): shared vtable.
+        void** cvt = *(void***)ctx;
+        const bool ctxOk = MH_CreateHook(cvt[33], (void*)&Hooked_OMSetRenderTargets, (void**)&o_OMSetRenderTargets) == MH_OK &&
+                           MH_CreateHook(cvt[34], (void*)&Hooked_OMSetRenderTargetsUav, (void**)&o_OMSetRenderTargetsUav) == MH_OK &&
+                           MH_EnableHook(cvt[33]) == MH_OK && MH_EnableHook(cvt[34]) == MH_OK;
+        if (!ctxOk) Log(1, "overlay: OMSetRenderTargets hooks failed, SpeedFX draws at Present (HUD blurred)");
         Log(1, "overlay: Present=%p ResizeBuffers=%p hooks %s", present, resize, ok ? "installed" : "FAILED");
         sc->Release(); ctx->Release(); dev->Release();
     } else {

@@ -56,6 +56,7 @@ static const struct { const char* name; uint32_t rva; } kExpected[] = {
     { "TimeInMilliseconds", 0x52397F8 }, { "Hours", 0x521270B }, { "LastClockTick", 0x522A58C }, { "WeatherRegion", 0x5300048 },
     { "MsPerGameMinute", 0x522AD00 }, { "TheCamera.m_matrix", 0x53E13F8 },
     { "CWorld::PlayerInFocus", 0x521E79A }, { "CWorld::Players", 0x53EA730 },
+    { "TimeCycle fog reduction", 0x11839DA }, { "CCutsceneMgr::ms_running", 0x5729449 },
 };
 
 int main(int argc, char** argv) {

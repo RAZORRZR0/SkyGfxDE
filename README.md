@@ -46,11 +46,12 @@ Every look setting can be changed live, and **Save to ini** writes the values ba
 - **Timecyc colours.** Sky top/bottom, fog, ambient, sun and cloud colours take the timecyc hue. DE's luminance is kept, so auto-exposure stays calibrated.
 - **Shadows.** The indirect fill that lights shadowed areas is lowered by `Darkness × timecyc shadow strength`. The sun's shadow maps are untouched, and interior volumes are skipped.
 - **SpeedFX.** The original's speed blur, ported from `CPostEffects::SpeedFX` in gta_sa.exe 1.0 US (`0x7030A0`; gta-reversed doesn't reverse it) and the call in `CPostEffects::Render`.
-  - The trigger: the player is in a vehicle that isn't a plane, heli, boat or train, and the speed `|m_vecMoveSpeed|` picks a row of the original's table (`0x8D5190`).
+  - The trigger: the player is in a vehicle that isn't a plane, heli, boat or train (type `+0x890`), and not in a cutscene (`CCutsceneMgr::ms_running`, found through its use in `CTimeCycle::CalcColoursForPoint`). The speed `|m_vecMoveSpeed|` picks a row of the original's table (`0x8D5190`).
+  - Nitro: a car with `bNosInst` (`handlingFlags +0x5C0 & 0x80000`) whose `m_fTireTemperature` (`+0xC0C`) is below 0 uses `clamp(2 · (moveSpeed · forward) · (m_GasPedal (+0x710) + 1), 0, 1)` when the dot product is above 0.2, even in cutscenes. The offsets come from DE's `CAutomobile::NitrousControl` (`0x14138F290`).
   - The table rows: at 0.6 / 0.7 / 0.8 / 0.9 / 0.93 / 0.96 / 1.0 units per frame the effect draws 1 / 2 / 3 / 3 / 4 / 4 / 5 passes, with shift 4 and wobble 0 / 0 / 0 / 0 / 1 / 2 / 3. 0.6 units per frame is about 108 km/h.
   - Each pass draws a copy of the frame at alpha 36 (`m_SpeedFXAlpha`) with point sampling and clamp. Its UV rectangle shrinks by `shift × 0.0025` per pass, plus a per-frame `rand()` wobble of `wobble × 0.004`, with the original's corner signs.
-  - Not ported yet: the NOS boost branch, the halving when looking behind or sideways, and the cutscene check.
-  - It is drawn at Present, so DE's HUD is blurred with the scene; the original applied it before the HUD.
+  - Looking direction (`TheCamera.m_aCams[m_nActiveCam].m_nDirectionWasLooking`; DE: TheCamera `+0x5B` is the active cam, cams are `0x1B8` bytes, the field is at `+0x1C4`): looking behind gives no visible effect; looking sideways halves the shift, removes the wobble and keeps only the right-edge stretch, as in `0x7030A0`.
+  - It is drawn before the HUD: just before the backbuffer's second render-target bind of the frame (`OMSetRenderTargets` hook, `[SpeedFX] HudBind`). DE binds the backbuffer 3 times a frame (598 of 600 frames measured) and draws the HUD after the second bind. `TestMode=1` forces the full effect, as the original's `m_bSpeedFXTestMode` did.
 - **Characters.** Makes peds matte. DE's character materials come from three glossy master materials:
   - skin, `M_Character_VGD`: `GlobalRoughness` 0.5, with a subsurface profile;
   - clothes, `M_Character_Clothes_VGD`: `Roughness` 0.9 × texture, `Specular` 0.5;

@@ -38,6 +38,8 @@ struct Config {
     float shadowDarkness = 0.5f;
     // SpeedFX: the original's speed blur (CPostEffects::SpeedFX)
     bool  speedFx = true;
+    int   speedFxHudBind = 2;      // draw before the Nth backbuffer bind of a frame (the HUD's); 0 = at Present
+    bool  speedFxTestMode = false; // CPostEffects::m_bSpeedFXTestMode: full effect (input 1.0) always
     // characters: roughness towards 1, specular x(1 - matte) on DE's glossy ped materials
     float pedMatte = 0.6f;
     // timecyc

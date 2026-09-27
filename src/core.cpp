@@ -117,6 +117,8 @@ void ReadIni() {
     c.fogOpacity          = Clamp(IniFloat("Atmosphere", "FogOpacity", 0.5f), 0.05f, 0.95f);
     c.shadowDarkness      = Clamp(IniFloat("Shadows", "Darkness", 0.5f), 0.0f, 0.9f);
     c.speedFx             = GetPrivateProfileIntA("SpeedFX", "Enabled", 1, ini) != 0;
+    c.speedFxHudBind      = GetPrivateProfileIntA("SpeedFX", "HudBind", 2, ini);
+    c.speedFxTestMode     = GetPrivateProfileIntA("SpeedFX", "TestMode", 0, ini) != 0;
     c.pedMatte            = Clamp(IniFloat("Characters", "Matte", 0.6f), 0.0f, 1.0f);
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 1.0f, 500.0f);
     c.freecamSensitivity  = Clamp(IniFloat("Tools", "FreecamSensitivity", 0.15f), 0.01f, 2.0f);
@@ -152,6 +154,9 @@ bool SaveIni() {
     PutFloat("Atmosphere", "FogOpacity", c.fogOpacity);
     PutFloat("Shadows", "Darkness", c.shadowDarkness);
     WritePrivateProfileStringA("SpeedFX", "Enabled", c.speedFx ? "1" : "0", g_iniPath);
+    char hb[8]; snprintf(hb, sizeof(hb), "%d", c.speedFxHudBind);
+    WritePrivateProfileStringA("SpeedFX", "HudBind", hb, g_iniPath);
+    WritePrivateProfileStringA("SpeedFX", "TestMode", c.speedFxTestMode ? "1" : "0", g_iniPath);
     PutFloat("Characters", "Matte", c.pedMatte);
     PutFloat("Tools", "FreecamSpeed", c.freecamSpeed);
     PutFloat("Tools", "FreecamSensitivity", c.freecamSensitivity);
@@ -901,9 +906,13 @@ void LookPanel() {
         ImGui::Text("indirect light x%.2f  (%d post-process volumes)", g_look.indirect, g_look.volumes);
     }
     if (ImGui::CollapsingHeader("Characters", ImGuiTreeNodeFlags_DefaultOpen)) PedsPanel();
-    ImGui::Checkbox("SpeedFX (original speed blur)", &g_cfg.speedFx);
-    ImGui::SameLine();
-    ImGui::TextDisabled("row %d", g_speedFxRow);
+    if (ImGui::CollapsingHeader("SpeedFX", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("SpeedFX (original speed blur)", &g_cfg.speedFx);
+        ImGui::SameLine();
+        ImGui::Checkbox("Test mode", &g_cfg.speedFxTestMode);
+        ImGui::SliderInt("Before backbuffer bind", &g_cfg.speedFxHudBind, 0, 6);
+        ImGui::TextDisabled("row %d, looking %d (0 = at Present, HUD blurred)", g_speedFxRow & 0xFF, g_speedFxRow < 0 ? 0 : g_speedFxRow >> 8);
+    }
     ImGui::Separator();
     if (ImGui::Button("Save to ini")) SaveIni();
     ImGui::SameLine();

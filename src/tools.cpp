@@ -233,23 +233,50 @@ static void AfterCamera(float dt) {
     g_teleportToCam = false;
 }
 
-// SpeedFX, from CPostEffects::Render (gta-reversed PostEffects.cpp): player vehicle, not plane/heli/boat/train,
-// speed = |m_vecMoveSpeed| (units per frame) picks the last table row it reaches (gta_sa.exe 1.0 0x7030A0).
-// ponytail: NOS boost branch, look-behind/sideways halving and the cutscene check skipped; add with their DE offsets.
+// SpeedFX, CPostEffects::Render (gta-reversed PostEffects.cpp) with DE offsets:
+// - player vehicle, not heli/plane/boat/train (type +0x890: 3/4/5/6);
+// - NOS: automobile (type 0) with handlingFlags.bNosInst (+0x5C0 & 0x80000) and m_fTireTemperature (+0xC0C) < 0
+//   (nitro burning, CAutomobile::NitrousControl 0x14138F290): dir = moveSpeed . forward, if > 0.2 the input is
+//   clamp(2 * dir * (m_GasPedal (+0x710) + 1), 0, 1), drawn even in cutscenes as in the original;
+// - else, if !CCutsceneMgr::ms_running, the input is |moveSpeed| (units per frame).
+// The input picks the last kSpeedFx row it reaches. SpeedFX (0x7030A0) then reads TheCamera.m_aCams[m_nActiveCam].
+// m_nDirectionWasLooking: DE TheCamera + 0x5B (active cam), cams of 0x1B8 bytes, field at +0x1C4 (1 behind, 2 side).
+uint8_t* g_cutsceneRunning = nullptr; // CCutsceneMgr::ms_running (InstallTools)
+static int SpeedFxInputRow(float input) {
+    for (int i = 6; i >= 0; --i)
+        if (input >= kSpeedFx[i].speed) return i;
+    return -1;
+}
+
 static void SpeedFxRowUpdate() {
     int row = -1;
     const uint8_t* ped = g_players[0x1C0 / 8 * *g_playerInFocus];
     const uint8_t* veh = ped && (*(const uint32_t*)(ped + 0x634) & 0x100) ? *(uint8_t* const*)(ped + 0x7C8) : nullptr;
-    const uint32_t type = veh ? *(const uint32_t*)(veh + 0x890) : 0; // 3 heli, 4 plane, 5 boat, 6 train
-    if (veh && g_cfg.speedFx && g_active && (type < 3 || type > 6)) {
+    const uint32_t type = veh ? *(const uint32_t*)(veh + 0x890) : 0;
+    if (g_cfg.speedFxTestMode && g_cfg.speedFx && g_active) {
+        row = SpeedFxInputRow(1.0f); // m_bSpeedFXTestMode: SetSpeedFXManualSpeedCurrentFrame(1.0f), no vehicle needed
+    } else if (veh && g_cfg.speedFx && g_active && (type < 3 || type > 6)) {
         const float* v = (const float*)(veh + ENT::MoveSpeed);
-        const float speed = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-        for (int i = 6; i >= 0 && row < 0; --i)
-            if (speed >= kSpeedFx[i].speed) row = i;
+        bool nos = false;
+        const float* m = *(const float* const*)(veh + ENT::Matrix);
+        if (type == 0 && (*(const uint32_t*)(veh + 0x5C0) & 0x80000) && *(const float*)(veh + 0xC0C) < 0.0f && m) {
+            const float dir = v[0] * m[4] + v[1] * m[5] + v[2] * m[6]; // GetMoveSpeed().Dot(GetForward())
+            if (dir > 0.2f) {
+                row = SpeedFxInputRow(fminf(fmaxf(2.0f * dir * (*(const float*)(veh + 0x710) + 1.0f), 0.0f), 1.0f));
+                nos = true;
+            }
+        }
+        if (!nos && !(g_cutsceneRunning && *g_cutsceneRunning))
+            row = SpeedFxInputRow(sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]));
+    }
+    int look = 0;
+    if (row >= 0) {
+        const uint8_t* cam = (const uint8_t*)g_camMatrix - 0x18; // TheCamera
+        look = *(const uint32_t*)(cam + 0x1C4 + 0x1B8 * cam[0x5B]);
     }
     static bool logged = false;
-    if (row >= 0 && !logged) { logged = true; Log(1, "speedfx: first active (row %d)", row); }
-    g_speedFxRow = row;
+    if (row >= 0 && !logged) { logged = true; Log(1, "speedfx: first active (row %d, looking %d)", row, look); }
+    g_speedFxRow = row < 0 ? -1 : row | (look == 1 || look == 2 ? look : 0) << 8;
 }
 
 static uintptr_t Hooked_CameraProcess(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d) {
@@ -365,11 +392,13 @@ bool InstallTools() {
     uint8_t* cp = FindUnique("48 8B C4 48 89 58 18 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 D8 FE FF FF 48 81 EC F0 01 00 00 0F 29 70 B8 0F 29 78 A8 44 0F 29 40 98 44 0F 29 48 88");
     uint8_t* ct = FindUnique("8B 0D ?? ?? ?? ?? 2B C1 44 8B 05 ?? ?? ?? ?? F3 0F 10 35 ?? ?? ?? ?? 44 0F B6 0D");
     uint8_t* tu = FindUnique("4C 8B DC 55 56 49 8D 6B A1 48 81 EC C8 00 00 00 45 0F 29 4B A8 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 D7");
+    // CTimeCycle::CalcColoursForPoint fog reduction: !bScriptsForceRain && (PlayerNoRain || CamNoRain || ms_running)
+    uint8_t* fr = FindUnique("80 3D ?? ?? ?? ?? 00 75 ?? F6 05 ?? ?? ?? ?? 08 75 ?? F6 05 ?? ?? ?? ?? 08 75 ?? 80 3D ?? ?? ?? ?? 00");
     const char* names[] = { "CWeather::Update", "CClock::SetGameClock", "CWeather::FindWeatherTypesList", "FindPlayerEntity",
-                            "CCamera::Process", "CClock::Update tick", "CTimeCycle::Update" };
-    uint8_t* found[] = { wu, sc, fl, fpe, cp, ct, tu };
+                            "CCamera::Process", "CClock::Update tick", "CTimeCycle::Update", "TimeCycle fog reduction" };
+    uint8_t* found[] = { wu, sc, fl, fpe, cp, ct, tu, fr };
     bool ok = true;
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 8; ++i) {
         Log(found[i] ? 2 : 1, "tools sig %-32s %p%s", names[i], found[i], found[i] ? "" : "  <-- NOT FOUND");
         ok &= found[i] != nullptr;
         if (found[i]) Resolved(names[i], found[i]);
@@ -380,7 +409,7 @@ bool InstallTools() {
                          movzxwEax[] = { 0x0F, 0xB7, 0x05 }, movWordDx[] = { 0x66, 0x89, 0x15 }, movssXmm7[] = { 0xF3, 0x0F, 0x11, 0x3D },
                          movEdi[] = { 0x8B, 0x3D }, movzxEsi[] = { 0x0F, 0xB6, 0x35 }, movMemEax[] = { 0x89, 0x05 },
                          movsxEcx[] = { 0x0F, 0xBF, 0x0D }, movR8d[] = { 0x44, 0x8B, 0x05 }, movRax[] = { 0x48, 0x8B, 0x05 },
-                         leaRcx[] = { 0x48, 0x8D, 0x0D };
+                         leaRcx[] = { 0x48, 0x8D, 0x0D }, cmpByte[] = { 0x80, 0x3D };
     const Anchor anchors[] = {
         { "Minutes", wu, 0x5E, movzxEax, 3, 7, &g_minutes },
         { "Seconds", wu, 0x65, movzxEcx, 3, 7, &g_seconds },
@@ -396,6 +425,7 @@ bool InstallTools() {
         { "TheCamera.m_matrix", tu, 0x23, movRax, 3, 7, &g_camMatrix },
         { "CWorld::PlayerInFocus", fpe, 0x0, movzxEax, 3, 7, &g_playerInFocus },
         { "CWorld::Players", fpe, 0x7, leaRcx, 3, 7, &g_players },
+        { "CCutsceneMgr::ms_running", fr, 0x1B, cmpByte, 2, 7, &g_cutsceneRunning },
     };
     for (const Anchor& a : anchors) {
         uint8_t* p = RipAt(a.base + a.off, a.op, a.opLen, a.len);
