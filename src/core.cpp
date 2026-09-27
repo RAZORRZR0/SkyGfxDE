@@ -116,6 +116,7 @@ void ReadIni() {
     c.fogDistance         = Clamp(IniFloat("Atmosphere", "FogDistance", 1.8f), 0.5f, 5.0f);
     c.fogOpacity          = Clamp(IniFloat("Atmosphere", "FogOpacity", 0.5f), 0.05f, 0.95f);
     c.shadowDarkness      = Clamp(IniFloat("Shadows", "Darkness", 0.5f), 0.0f, 0.9f);
+    c.speedFx             = GetPrivateProfileIntA("SpeedFX", "Enabled", 1, ini) != 0;
     c.pedMatte            = Clamp(IniFloat("Characters", "Matte", 0.6f), 0.0f, 1.0f);
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 1.0f, 500.0f);
     c.freecamSensitivity  = Clamp(IniFloat("Tools", "FreecamSensitivity", 0.15f), 0.01f, 2.0f);
@@ -150,6 +151,7 @@ bool SaveIni() {
     PutFloat("Atmosphere", "FogDistance", c.fogDistance);
     PutFloat("Atmosphere", "FogOpacity", c.fogOpacity);
     PutFloat("Shadows", "Darkness", c.shadowDarkness);
+    WritePrivateProfileStringA("SpeedFX", "Enabled", c.speedFx ? "1" : "0", g_iniPath);
     PutFloat("Characters", "Matte", c.pedMatte);
     PutFloat("Tools", "FreecamSpeed", c.freecamSpeed);
     PutFloat("Tools", "FreecamSensitivity", c.freecamSensitivity);
@@ -899,6 +901,9 @@ void LookPanel() {
         ImGui::Text("indirect light x%.2f  (%d post-process volumes)", g_look.indirect, g_look.volumes);
     }
     if (ImGui::CollapsingHeader("Characters", ImGuiTreeNodeFlags_DefaultOpen)) PedsPanel();
+    ImGui::Checkbox("SpeedFX (original speed blur)", &g_cfg.speedFx);
+    ImGui::SameLine();
+    ImGui::TextDisabled("row %d", g_speedFxRow);
     ImGui::Separator();
     if (ImGui::Button("Save to ini")) SaveIni();
     ImGui::SameLine();

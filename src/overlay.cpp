@@ -5,6 +5,7 @@
 #include "skygfx.h"
 #include <d3d11.h>
 #include <dxgi.h>
+#include <d3dcompiler.h>
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_impl_dx11.h"
 #include "../imgui/imgui_impl_win32.h"
@@ -62,6 +63,152 @@ static void CreateRtv() {
 
 static void ReleaseRtv() {
     if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; }
+}
+
+// ---------------------------------------------------------------- SpeedFX (gta_sa.exe 1.0 US CPostEffects::SpeedFX, 0x7030A0)
+// The frame is copied once, then drawn `passes` times as a full-screen strip quad (TL, TR, BL, BR) at alpha 36 with point
+// sampling and clamp, each pass shrinking the UV rectangle by shift * 0.0025 per side (a zoom) plus a per-frame random
+// wobble of wobble * 0.004 * rand()/32767, with the original's corner signs (BL's v uses the u wobble, as in 0x7030A0).
+// ponytail: drawn at Present, so DE's HUD is blurred too (the original ran before the HUD); needs a pre-UI hook to avoid.
+static ID3D11Texture2D* g_fxCopy = nullptr;
+static ID3D11ShaderResourceView* g_fxSrv = nullptr;
+static ID3D11VertexShader* g_fxVs = nullptr;
+static ID3D11PixelShader* g_fxPs = nullptr;
+static ID3D11Buffer* g_fxCb = nullptr;
+static ID3D11SamplerState* g_fxSampler = nullptr;
+static ID3D11BlendState* g_fxBlend = nullptr;
+static ID3D11RasterizerState* g_fxRaster = nullptr;
+static ID3D11DepthStencilState* g_fxDepth = nullptr;
+static bool g_fxFailed = false;
+
+static const char kFxHlsl[] =
+    "cbuffer C : register(b0) { float4 uvTop; float4 uvBottom; float alpha; };\n"
+    "Texture2D T : register(t0); SamplerState S : register(s0);\n"
+    "void vs(uint id : SV_VertexID, out float4 pos : SV_Position, out float2 uv : TEXCOORD0) {\n"
+    "  float2 c = float2(id & 1, id >> 1);\n"                   // 0 TL, 1 TR, 2 BL, 3 BR (triangle strip)
+    "  pos = float4(c.x * 2 - 1, 1 - c.y * 2, 0, 1);\n"
+    "  float4 row = c.y ? uvBottom : uvTop; uv = c.x ? row.zw : row.xy; }\n"
+    "float4 ps(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return float4(T.Sample(S, uv).rgb, alpha); }\n";
+
+static void ReleaseFxCopy() {
+    if (g_fxSrv) { g_fxSrv->Release(); g_fxSrv = nullptr; }
+    if (g_fxCopy) { g_fxCopy->Release(); g_fxCopy = nullptr; }
+}
+
+static bool FxInit() {
+    if (g_fxVs) return true;
+    if (g_fxFailed) return false;
+    ID3DBlob *vs = nullptr, *ps = nullptr;
+    bool ok = SUCCEEDED(D3DCompile(kFxHlsl, sizeof(kFxHlsl) - 1, "speedfx", nullptr, nullptr, "vs", "vs_4_0", 0, 0, &vs, nullptr)) &&
+              SUCCEEDED(D3DCompile(kFxHlsl, sizeof(kFxHlsl) - 1, "speedfx", nullptr, nullptr, "ps", "ps_4_0", 0, 0, &ps, nullptr)) &&
+              SUCCEEDED(g_device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &g_fxVs)) &&
+              SUCCEEDED(g_device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, &g_fxPs));
+    if (vs) vs->Release();
+    if (ps) ps->Release();
+    D3D11_BUFFER_DESC cb{ 48, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE };
+    D3D11_SAMPLER_DESC sd{ D3D11_FILTER_MIN_MAG_MIP_POINT, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE_ADDRESS_CLAMP,
+                           D3D11_TEXTURE_ADDRESS_CLAMP };
+    sd.MaxLOD = D3D11_FLOAT32_MAX;
+    D3D11_BLEND_DESC bd{};
+    bd.RenderTarget[0] = { TRUE, D3D11_BLEND_SRC_ALPHA, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_OP_ADD, D3D11_BLEND_ONE,
+                           D3D11_BLEND_ZERO, D3D11_BLEND_OP_ADD, D3D11_COLOR_WRITE_ENABLE_ALL };
+    D3D11_RASTERIZER_DESC rd{ D3D11_FILL_SOLID, D3D11_CULL_NONE };
+    rd.DepthClipEnable = TRUE;
+    D3D11_DEPTH_STENCIL_DESC dd{}; // depth and stencil off
+    ok = ok && SUCCEEDED(g_device->CreateBuffer(&cb, nullptr, &g_fxCb)) && SUCCEEDED(g_device->CreateSamplerState(&sd, &g_fxSampler)) &&
+         SUCCEEDED(g_device->CreateBlendState(&bd, &g_fxBlend)) && SUCCEEDED(g_device->CreateRasterizerState(&rd, &g_fxRaster)) &&
+         SUCCEEDED(g_device->CreateDepthStencilState(&dd, &g_fxDepth));
+    if (!ok) { g_fxFailed = true; Log(1, "speedfx: shader/state creation failed, SpeedFX off"); }
+    return ok;
+}
+
+static void SpeedFx() {
+    const int row = g_speedFxRow;
+    if (row < 0 || row > 6 || !g_rtv || !FxInit()) return;
+    ID3D11Texture2D* back = nullptr;
+    if (FAILED(g_swapChain->GetBuffer(0, IID_PPV_ARGS(&back)))) return;
+    D3D11_TEXTURE2D_DESC td;
+    back->GetDesc(&td);
+    D3D11_TEXTURE2D_DESC have{};
+    if (g_fxCopy) g_fxCopy->GetDesc(&have);
+    if (!g_fxCopy || have.Width != td.Width || have.Height != td.Height || have.Format != td.Format) {
+        ReleaseFxCopy();
+        D3D11_TEXTURE2D_DESC cd = td;
+        cd.BindFlags = D3D11_BIND_SHADER_RESOURCE; cd.Usage = D3D11_USAGE_DEFAULT; cd.CPUAccessFlags = 0; cd.MiscFlags = 0;
+        cd.SampleDesc = { 1, 0 }; cd.MipLevels = 1; cd.ArraySize = 1;
+        if (FAILED(g_device->CreateTexture2D(&cd, nullptr, &g_fxCopy)) || FAILED(g_device->CreateShaderResourceView(g_fxCopy, nullptr, &g_fxSrv))) {
+            ReleaseFxCopy(); back->Release(); return;
+        }
+    }
+    g_context->CopyResource(g_fxCopy, back); // pRasterFrontBuffer
+    back->Release();
+
+    // Save the state we touch (the game's, restored after).
+    ID3D11RenderTargetView* rtv = nullptr; ID3D11DepthStencilView* dsv = nullptr;
+    g_context->OMGetRenderTargets(1, &rtv, &dsv);
+    ID3D11BlendState* blend = nullptr; FLOAT bf[4]; UINT mask; g_context->OMGetBlendState(&blend, bf, &mask);
+    ID3D11DepthStencilState* depth = nullptr; UINT stencilRef; g_context->OMGetDepthStencilState(&depth, &stencilRef);
+    ID3D11RasterizerState* raster = nullptr; g_context->RSGetState(&raster);
+    UINT nvp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE; D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+    g_context->RSGetViewports(&nvp, vps);
+    ID3D11VertexShader* vs = nullptr; g_context->VSGetShader(&vs, nullptr, nullptr);
+    ID3D11PixelShader* ps = nullptr; g_context->PSGetShader(&ps, nullptr, nullptr);
+    ID3D11Buffer* vcb = nullptr; g_context->VSGetConstantBuffers(0, 1, &vcb);
+    ID3D11Buffer* pcb = nullptr; g_context->PSGetConstantBuffers(0, 1, &pcb);
+    ID3D11ShaderResourceView* srv = nullptr; g_context->PSGetShaderResources(0, 1, &srv);
+    ID3D11SamplerState* smp = nullptr; g_context->PSGetSamplers(0, 1, &smp);
+    ID3D11InputLayout* il = nullptr; g_context->IAGetInputLayout(&il);
+    D3D11_PRIMITIVE_TOPOLOGY topo; g_context->IAGetPrimitiveTopology(&topo);
+    ID3D11GeometryShader* gs = nullptr; g_context->GSGetShader(&gs, nullptr, nullptr);
+
+    const D3D11_VIEWPORT vp{ 0, 0, (float)td.Width, (float)td.Height, 0, 1 };
+    g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
+    g_context->OMSetBlendState(g_fxBlend, nullptr, 0xFFFFFFFF);
+    g_context->OMSetDepthStencilState(g_fxDepth, 0);
+    g_context->RSSetState(g_fxRaster);
+    g_context->RSSetViewports(1, &vp);
+    g_context->IASetInputLayout(nullptr);
+    g_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    g_context->VSSetShader(g_fxVs, nullptr, 0);
+    g_context->GSSetShader(nullptr, nullptr, 0);
+    g_context->PSSetShader(g_fxPs, nullptr, 0);
+    g_context->VSSetConstantBuffers(0, 1, &g_fxCb);
+    g_context->PSSetConstantBuffers(0, 1, &g_fxCb);
+    g_context->PSSetShaderResources(0, 1, &g_fxSrv);
+    g_context->PSSetSamplers(0, 1, &g_fxSampler);
+
+    const SpeedFxRow& r = kSpeedFx[row];
+    const float u0 = 0, v0 = 0, u1 = 1, v1 = 1; // whole copy (the original's raster could be larger than the screen)
+    float rx = 0, ry = 0;
+    if (r.wobble > 0) {
+        rx = (float)rand() * 0.000030518509f * (u1 * r.wobble * 0.004f);
+        ry = (float)rand() * 0.000030518509f * (v1 * r.wobble * 0.004f);
+    }
+    const float stepU = u1 * r.shift * 0.0025f, stepV = v1 * r.shift * 0.0025f;
+    for (int k = 1; k <= r.passes; ++k) {
+        const float s = stepU * k, t = stepV * k;
+        const float c[12] = { u0 + s + rx, v0 + t + ry, u1 - s - rx, v0 + t + ry,   // TL, TR
+                              u0 + s + rx, v1 - t - rx, u1 - s - rx, v1 - t - ry,   // BL, BR
+                              kSpeedFxAlpha / 255.0f, 0, 0, 0 };
+        D3D11_MAPPED_SUBRESOURCE m;
+        if (FAILED(g_context->Map(g_fxCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) break;
+        memcpy(m.pData, c, sizeof(c));
+        g_context->Unmap(g_fxCb, 0);
+        g_context->Draw(4, 0);
+    }
+
+    g_context->OMSetRenderTargets(1, &rtv, dsv);
+    g_context->OMSetBlendState(blend, bf, mask);
+    g_context->OMSetDepthStencilState(depth, stencilRef);
+    g_context->RSSetState(raster);
+    g_context->RSSetViewports(nvp, vps);
+    g_context->VSSetShader(vs, nullptr, 0); g_context->PSSetShader(ps, nullptr, 0); g_context->GSSetShader(gs, nullptr, 0);
+    g_context->VSSetConstantBuffers(0, 1, &vcb); g_context->PSSetConstantBuffers(0, 1, &pcb);
+    g_context->PSSetShaderResources(0, 1, &srv); g_context->PSSetSamplers(0, 1, &smp);
+    g_context->IASetInputLayout(il); g_context->IASetPrimitiveTopology(topo);
+    IUnknown* held[] = { rtv, dsv, blend, depth, raster, vs, ps, gs, vcb, pcb, srv, smp, il };
+    for (IUnknown* o : held)
+        if (o) o->Release();
 }
 
 // ---------------------------------------------------------------- input
@@ -256,6 +403,7 @@ static void RenderFrame(IDXGISwapChain* sc) {
     ImGui::Render();
     ReleaseSRWLockExclusive(&g_imguiLock);
 
+    SpeedFx(); // under the ImGui menu
     ImDrawData* dd = ImGui::GetDrawData();
     if (dd && dd->CmdListsCount > 0 && g_rtv) {
         ID3D11RenderTargetView* prevRtv[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
@@ -283,7 +431,7 @@ static HRESULT STDMETHODCALLTYPE Hooked_Present(IDXGISwapChain* sc, UINT sync, U
 
 static HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(IDXGISwapChain* sc, UINT n, UINT w, UINT h, DXGI_FORMAT fmt, UINT fl) {
     const bool ours = g_ready && sc == g_swapChain;
-    if (ours) { ReleaseRtv(); ImGui_ImplDX11_InvalidateDeviceObjects(); }
+    if (ours) { ReleaseRtv(); ReleaseFxCopy(); ImGui_ImplDX11_InvalidateDeviceObjects(); }
     const HRESULT hr = o_ResizeBuffers(sc, n, w, h, fmt, fl);
     if (ours) { CreateRtv(); ImGui_ImplDX11_CreateDeviceObjects(); }
     return hr;

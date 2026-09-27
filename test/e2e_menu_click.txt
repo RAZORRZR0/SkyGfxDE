@@ -1,0 +1,1 @@
+FAIL: name 'menu_rect' is not defined

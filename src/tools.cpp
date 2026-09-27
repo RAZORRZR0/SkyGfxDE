@@ -31,6 +31,9 @@ static uint32_t* g_lastTick = nullptr;     // CClock::ms_nLastClockTick
 static uint32_t* g_msPerMinute = nullptr;  // CClock::ms_nMillisecondsPerGameMinute
 static uint32_t* g_timeMs = nullptr;       // CTimer::m_snTimeInMilliseconds
 static uint8_t** g_camMatrix = nullptr;    // TheCamera.m_matrix (CMatrix*)
+static uint8_t** g_players = nullptr;      // CWorld::Players[].m_pPed, stride 0x1C0
+static uint8_t*  g_playerInFocus = nullptr; // CWorld::PlayerInFocus
+volatile int g_speedFxRow = -1;           // row of kSpeedFx for this frame, -1 = off (read by the overlay)
 
 typedef uintptr_t (*Void_Fn)(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 typedef void (*SetGameClock_Fn)(uint8_t hours, uint8_t minutes, uint8_t day);
@@ -228,6 +231,21 @@ static void AfterCamera(float dt) {
         }
     }
     g_teleportToCam = false;
+
+    // SpeedFX, from CPostEffects::Render (gta-reversed PostEffects.cpp): player vehicle, not plane/heli/boat/train,
+    // speed = |m_vecMoveSpeed| (units per frame) picks the last table row it reaches (gta_sa.exe 1.0 0x7030A0).
+    // ponytail: NOS boost branch, look-behind/sideways halving and the cutscene check skipped; add with their DE offsets.
+    int row = -1;
+    const uint8_t* ped = g_players[0x1C0 / 8 * *g_playerInFocus];
+    const uint8_t* veh = ped && (*(const uint32_t*)(ped + 0x634) & 0x100) ? *(uint8_t* const*)(ped + 0x7C8) : nullptr;
+    const uint32_t type = veh ? *(const uint32_t*)(veh + 0x890) : 0; // 3 heli, 4 plane, 5 boat, 6 train
+    if (veh && g_cfg.speedFx && g_active && (type < 3 || type > 6)) {
+        const float* v = (const float*)(veh + ENT::MoveSpeed);
+        const float speed = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        for (int i = 6; i >= 0 && row < 0; --i)
+            if (speed >= kSpeedFx[i].speed) row = i;
+    }
+    g_speedFxRow = row;
 }
 
 static uintptr_t Hooked_CameraProcess(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d) {
@@ -356,7 +374,8 @@ bool InstallTools() {
     static const uint8_t movzxEax[] = { 0x0F, 0xB6, 0x05 }, movzxEcx[] = { 0x0F, 0xB6, 0x0D }, movzxwEdx[] = { 0x0F, 0xB7, 0x15 },
                          movzxwEax[] = { 0x0F, 0xB7, 0x05 }, movWordDx[] = { 0x66, 0x89, 0x15 }, movssXmm7[] = { 0xF3, 0x0F, 0x11, 0x3D },
                          movEdi[] = { 0x8B, 0x3D }, movzxEsi[] = { 0x0F, 0xB6, 0x35 }, movMemEax[] = { 0x89, 0x05 },
-                         movsxEcx[] = { 0x0F, 0xBF, 0x0D }, movR8d[] = { 0x44, 0x8B, 0x05 }, movRax[] = { 0x48, 0x8B, 0x05 };
+                         movsxEcx[] = { 0x0F, 0xBF, 0x0D }, movR8d[] = { 0x44, 0x8B, 0x05 }, movRax[] = { 0x48, 0x8B, 0x05 },
+                         leaRcx[] = { 0x48, 0x8D, 0x0D };
     const Anchor anchors[] = {
         { "Minutes", wu, 0x5E, movzxEax, 3, 7, &g_minutes },
         { "Seconds", wu, 0x65, movzxEcx, 3, 7, &g_seconds },
@@ -370,6 +389,8 @@ bool InstallTools() {
         { "WeatherRegion", fl, 0x0, movsxEcx, 3, 7, &g_region },
         { "MsPerGameMinute", ct, 0x8, movR8d, 3, 7, &g_msPerMinute },
         { "TheCamera.m_matrix", tu, 0x23, movRax, 3, 7, &g_camMatrix },
+        { "CWorld::PlayerInFocus", fpe, 0x0, movzxEax, 3, 7, &g_playerInFocus },
+        { "CWorld::Players", fpe, 0x7, leaRcx, 3, 7, &g_players },
     };
     for (const Anchor& a : anchors) {
         uint8_t* p = RipAt(a.base + a.off, a.op, a.opLen, a.len);

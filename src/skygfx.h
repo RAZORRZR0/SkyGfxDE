@@ -36,6 +36,8 @@ struct Config {
     float fogOpacity = 0.5f;   // GTA fog opacity at the scaled far clip; clear up to half of it
     // shadows
     float shadowDarkness = 0.5f;
+    // SpeedFX: the original's speed blur (CPostEffects::SpeedFX)
+    bool  speedFx = true;
     // characters: roughness towards 1, specular x(1 - matte) on DE's glossy ped materials
     float pedMatte = 0.6f;
     // timecyc
@@ -46,6 +48,13 @@ struct Config {
     float noclipSpeed = 15.0f;       // m/s
 };
 extern Config g_cfg;
+
+// SpeedFX table, gta_sa.exe 1.0 US 0x8D5190 (7 x {speed, passes, shift, wobble}); m_SpeedFXAlpha 0x8D5104 = 36.
+struct SpeedFxRow { float speed; int passes, shift, wobble; };
+constexpr SpeedFxRow kSpeedFx[7] = { { 0.6f, 1, 4, 0 }, { 0.7f, 2, 4, 0 }, { 0.8f, 3, 4, 0 }, { 0.9f, 3, 4, 0 },
+                                      { 0.93f, 4, 4, 1 }, { 0.96f, 4, 4, 2 }, { 1.0f, 5, 4, 3 } };
+constexpr int kSpeedFxAlpha = 36;
+extern volatile int g_speedFxRow; // tools.cpp (game thread) -> overlay.cpp (render thread)
 extern char g_dir[MAX_PATH];
 extern char g_iniPath[MAX_PATH];
 

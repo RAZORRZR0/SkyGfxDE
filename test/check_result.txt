@@ -32,6 +32,8 @@ LastClockTick                    rva=0x522A58C
 WeatherRegion                    rva=0x5300048
 MsPerGameMinute                  rva=0x522AD00
 TheCamera.m_matrix               rva=0x53E13F8
+CWorld::PlayerInFocus            rva=0x521E79A
+CWorld::Players                  rva=0x53EA730
 ok   tool anchor CWeather::Update at 0x12903B0
 ok   tool anchor CClock::SetGameClock at 0x112B980
 ok   tool anchor CWeather::FindWeatherTypesList at 0x1291330
@@ -51,6 +53,8 @@ ok   tool anchor LastClockTick at 0x522A58C
 ok   tool anchor WeatherRegion at 0x5300048
 ok   tool anchor MsPerGameMinute at 0x522AD00
 ok   tool anchor TheCamera.m_matrix at 0x53E13F8
+ok   tool anchor CWorld::PlayerInFocus at 0x521E79A
+ok   tool anchor CWorld::Players at 0x53EA730
 ok   timecyc.dat loaded into the tables
 table checksum=0x63A2CAE7
 ok   midnight/weather 0 ambient matches the file

@@ -55,6 +55,7 @@ static const struct { const char* name; uint32_t rva; } kExpected[] = {
     { "ForcedWeatherType", 0x5300018 }, { "OldWeatherType", 0x5300000 }, { "InterpolationValue", 0x52FFFE8 },
     { "TimeInMilliseconds", 0x52397F8 }, { "Hours", 0x521270B }, { "LastClockTick", 0x522A58C }, { "WeatherRegion", 0x5300048 },
     { "MsPerGameMinute", 0x522AD00 }, { "TheCamera.m_matrix", 0x53E13F8 },
+    { "CWorld::PlayerInFocus", 0x521E79A }, { "CWorld::Players", 0x53EA730 },
 };
 
 int main(int argc, char** argv) {
