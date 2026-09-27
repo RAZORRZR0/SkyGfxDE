@@ -90,15 +90,33 @@ static LRESULT CALLBACK Hooked_WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         if (!captureBefore && GetCapture() == hwnd) g_imguiOwnsCapture = true; // ImGui took a free capture
         if (--t_imguiDepth == 0) ReleaseSRWLockExclusive(&g_imguiLock);
     }
+    // Button-ups are swallowed only when their down was: an unmatched up reaching UE ends a capture that UE's viewport
+    // never started and spins the camera; ups of buttons held before the menu opened still reach the game.
+    static unsigned swallowedDown = 0; // bit per button (game thread)
+    auto button = [](UINT m, WPARAM w) -> unsigned {
+        switch (m) {
+        case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK: case WM_LBUTTONUP: return 1;
+        case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK: case WM_RBUTTONUP: return 2;
+        case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: case WM_MBUTTONUP: return 4;
+        case WM_XBUTTONDOWN: case WM_XBUTTONDBLCLK: case WM_XBUTTONUP: return GET_XBUTTON_WPARAM(w) == XBUTTON1 ? 8 : 16;
+        default: return 0;
+        }
+    };
+    if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP || msg == WM_XBUTTONUP) {
+        const unsigned b = button(msg, wp);
+        if (swallowedDown & b) { swallowedDown &= ~b; return 0; }
+    }
     if (capture) {
         switch (msg) {
         case WM_SYSKEYDOWN:
             if (wp == VK_F4) break; // Alt+F4 still works
             return 0;
-        case WM_KEYDOWN: case WM_CHAR: case WM_SYSCHAR: case WM_DEADCHAR:
-        case WM_MOUSEMOVE: case WM_LBUTTONDOWN: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN: case WM_XBUTTONDOWN:
+        case WM_LBUTTONDOWN: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN: case WM_XBUTTONDOWN:
         case WM_LBUTTONDBLCLK: case WM_RBUTTONDBLCLK: case WM_MBUTTONDBLCLK: case WM_XBUTTONDBLCLK:
-        case WM_MOUSEHWHEEL:
+            swallowedDown |= button(msg, wp);
+            return 0;
+        case WM_KEYDOWN: case WM_CHAR: case WM_SYSCHAR: case WM_DEADCHAR:
+        case WM_MOUSEMOVE: case WM_MOUSEHWHEEL:
             return 0;
         case WM_MOUSEWHEEL:
             if (!menu) ToolsAddWheel(GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA);
