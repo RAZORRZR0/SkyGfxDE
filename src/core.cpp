@@ -102,7 +102,6 @@ void ReadIni() {
     c.filterStrength      = Clamp(IniFloat("ColourFilter", "Strength", 1.0f), 0.0f, 2.0f);
     c.gameTimecycStrength = Clamp(IniFloat("ColourFilter", "GameTimecycStrength", 0.35f), 0.0f, 2.0f);
     c.keepBrightness      = Clamp(IniFloat("ColourFilter", "KeepBrightness", 0.5f), 0.0f, 1.0f);
-    c.gamma               = Clamp(IniFloat("ColourFilter", "Gamma", 2.2f), 1.0f, 3.0f);
     c.saturation          = Clamp(IniFloat("Grade", "Saturation", 1.15f), 0.0f, 2.0f);
     c.contrast            = Clamp(IniFloat("Grade", "Contrast", 1.05f), 0.5f, 2.0f);
     c.skyStrength         = Clamp(IniFloat("Colours", "Sky", 1.0f), 0.0f, 1.0f);
@@ -144,7 +143,6 @@ bool SaveIni() {
     PutFloat("ColourFilter", "Strength", c.filterStrength);
     PutFloat("ColourFilter", "GameTimecycStrength", c.gameTimecycStrength);
     PutFloat("ColourFilter", "KeepBrightness", c.keepBrightness);
-    PutFloat("ColourFilter", "Gamma", c.gamma);
     PutFloat("Grade", "Saturation", c.saturation);
     PutFloat("Grade", "Contrast", c.contrast);
     PutFloat("Colours", "Sky", c.skyStrength);
@@ -439,8 +437,44 @@ static void ReadU16Rgb(const uint8_t* p, float out[3]) {
     for (int i = 0; i < 3; ++i) out[i] = ((const uint16_t*)p)[i] / 255.0f;
 }
 
+// UE 4.26 FilmToneMap (TonemapCommon.ush) on a grey, then the sRGB encode: linear scene value -> display value.
+// Film slope, toe, shoulder, black clip, white clip: UE defaults, replaced by the post-process volume's overrides
+// when it has them (DE's main volume overrides slope and toe; TrackVolume logs the values).
+static float g_film[5] = { 0.88f, 0.55f, 0.26f, 0.0f, 0.04f };
+static float FilmDisplay(float x) {
+    const float S = g_film[0], Toe = g_film[1], Sh = g_film[2], BC = g_film[3], WC = g_film[4];
+    const float TS = 1 + BC - Toe, SS = 1 + WC - Sh;
+    float TM;
+    if (Toe > 0.8f) TM = (1 - Toe - 0.18f) / S + log10f(0.18f);
+    else { const float bt = (0.18f + BC) / TS - 1; TM = log10f(0.18f) - 0.5f * logf((1 + bt) / (1 - bt)) * (TS / S); }
+    const float SM = (1 - Toe) / S - TM, ShM = Sh / S - SM;
+    if (x <= 0.0f) return 0.0f;
+    const float L = log10f(x), st = S * (L + SM);
+    const float toe = L < TM ? -BC + 2 * TS / (1 + expf((-2 * S / TS) * (L - TM))) : st;
+    const float sho = L > ShM ? (1 + WC) - 2 * SS / (1 + expf((2 * S / SS) * (L - ShM))) : st;
+    float t = Clamp((L - TM) / (ShM - TM), 0.0f, 1.0f);
+    if (ShM < TM) t = 1 - t;
+    t = (3 - 2 * t) * t * t;
+    const float v = Clamp(toe + (sho - toe) * t, 0.0f, 1.0f);
+    return v <= 0.0031308f ? 12.92f * v : 1.055f * powf(v, 1 / 2.4f) - 0.055f;
+}
+
+// ColorGain k that turns mid grey (0.18) into `display` x its display value: k = FilmDisplay^-1(...) / 0.18.
+static float LinearGainFor(float display) {
+    const float target = fminf(display * FilmDisplay(0.18f), 0.999f);
+    float lo = 1e-4f, hi = 64.0f;
+    for (int i = 0; i < 40; ++i) {
+        const float mid = sqrtf(lo * hi);
+        (FilmDisplay(mid) < target ? lo : hi) = mid;
+    }
+    return lo / 0.18f;
+}
+
 // skygfx CPostEffects::ColourFilter_PS2: the frame is drawn with postfx1 (MODULATE2X, replace), then
-// postfx2 is added with its alpha (also MODULATE2X): gain = 2*c1 + 2*c2 * min(1, 2*a2), per channel.
+// postfx2 is added with its alpha (also MODULATE2X): display gain = 2*c1 + 2*c2 * min(1, 2*a2), per channel.
+// DE applies ColorGain to linear colour before its filmic tone curve, so the gain is converted to the ColorGain that
+// gives that display change at mid grey (a plain gamma power crushes the weak channels in the curve's toe: blue at
+// PS2 LA midday came out 0.37 instead of 0.64). Shadows still get a little more, highlights a little less.
 // With a loaded (PS2) timecyc the filter runs as configured. The game's own timecyc has PC/mobile-style
 // postfx values (postfx2 alpha 255, strong colours) that give a heavily orange PS2 gain, so there it is
 // applied tint-only at GameTimecycStrength.
@@ -454,10 +488,8 @@ static void ComputePs2Gain(const uint8_t* cc, float gain[3]) {
     const float keep = g_customTimecyc ? g_cfg.keepBrightness : 1.0f;
     const float strength = g_customTimecyc ? g_cfg.filterStrength : g_cfg.gameTimecycStrength;
     const float norm = l > 1e-3f ? powf(l, keep) : 1.0f;
-    for (int i = 0; i < 3; ++i) {
-        const float lin = powf(Clamp(g[i] / norm, 0.0f, 4.0f), g_cfg.gamma);
-        gain[i] = Clamp(1.0f + (lin - 1.0f) * strength, 0.0f, 4.0f);
-    }
+    for (int i = 0; i < 3; ++i)
+        gain[i] = Clamp(LinearGainFor(fmaxf(1.0f + (g[i] / norm - 1.0f) * strength, 0.01f)), 0.0f, 4.0f);
 }
 
 // ----------------------------------------------------------------------
@@ -548,7 +580,11 @@ static Volume* TrackVolume(uint8_t* obj) {
     v.origIndirect = v.origIndirectOverride ? *(const float*)(s + PP::IndirectLightingIntensity) : 1.0f;
     v.origBloomOverride = (s[PP::OverrideByte6] & PP::BloomBit) != 0;
     v.origBloom = *(const float*)(s + PP::BloomIntensity);
-    Log(1, "post-process volume %p tracked (%d total, interior=%d)", obj, g_volumeCount, obj[PP::IsInterior]);
+    const bool filmBits[5] = { (s[4] & 0x80) != 0, (s[5] & 1) != 0, (s[5] & 2) != 0, (s[5] & 4) != 0, (s[5] & 8) != 0 };
+    if (!obj[PP::IsInterior])
+        for (int i = 0; i < 5; ++i) if (filmBits[i]) g_film[i] = ((const float*)(s + 0x184))[i]; // FilmSlope..FilmWhiteClip
+    Log(1, "post-process volume %p tracked (%d total, interior=%d, film slope %.3f toe %.3f shoulder %.3f black %.3f white %.3f)",
+        obj, g_volumeCount, obj[PP::IsInterior], g_film[0], g_film[1], g_film[2], g_film[3], g_film[4]);
     return &v;
 }
 
@@ -874,7 +910,7 @@ void LookPanel() {
         } else {
             ImGui::SliderFloat("Strength (game timecyc)", &g_cfg.gameTimecycStrength, 0.0f, 2.0f);
         }
-        ImGui::SliderFloat("Gamma", &g_cfg.gamma, 1.0f, 3.0f);
+        ImGui::TextDisabled("display gain -> DE ColorGain through the filmic curve at mid grey");
         ImGui::Text("gain  %.3f %.3f %.3f", g_look.gain[0], g_look.gain[1], g_look.gain[2]);
     }
     if (ImGui::CollapsingHeader("Grade", ImGuiTreeNodeFlags_DefaultOpen)) {

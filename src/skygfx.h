@@ -22,7 +22,6 @@ struct Config {
     float filterStrength = 1.0f;
     float gameTimecycStrength = 0.35f;
     float keepBrightness = 0.5f;
-    float gamma = 2.2f;
     // grading on top of DE's own values
     float saturation = 1.15f;
     float contrast = 1.05f;
