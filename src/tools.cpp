@@ -231,10 +231,12 @@ static void AfterCamera(float dt) {
         }
     }
     g_teleportToCam = false;
+}
 
-    // SpeedFX, from CPostEffects::Render (gta-reversed PostEffects.cpp): player vehicle, not plane/heli/boat/train,
-    // speed = |m_vecMoveSpeed| (units per frame) picks the last table row it reaches (gta_sa.exe 1.0 0x7030A0).
-    // ponytail: NOS boost branch, look-behind/sideways halving and the cutscene check skipped; add with their DE offsets.
+// SpeedFX, from CPostEffects::Render (gta-reversed PostEffects.cpp): player vehicle, not plane/heli/boat/train,
+// speed = |m_vecMoveSpeed| (units per frame) picks the last table row it reaches (gta_sa.exe 1.0 0x7030A0).
+// ponytail: NOS boost branch, look-behind/sideways halving and the cutscene check skipped; add with their DE offsets.
+static void SpeedFxRowUpdate() {
     int row = -1;
     const uint8_t* ped = g_players[0x1C0 / 8 * *g_playerInFocus];
     const uint8_t* veh = ped && (*(const uint32_t*)(ped + 0x634) & 0x100) ? *(uint8_t* const*)(ped + 0x7C8) : nullptr;
@@ -245,6 +247,8 @@ static void AfterCamera(float dt) {
         for (int i = 6; i >= 0 && row < 0; --i)
             if (speed >= kSpeedFx[i].speed) row = i;
     }
+    static bool logged = false;
+    if (row >= 0 && !logged) { logged = true; Log(1, "speedfx: first active (row %d)", row); }
     g_speedFxRow = row;
 }
 
@@ -253,6 +257,7 @@ static uintptr_t Hooked_CameraProcess(uintptr_t a, uintptr_t b, uintptr_t c, uin
     const float dt = FrameDt();
     __try {
         AfterCamera(dt);
+        SpeedFxRowUpdate();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         static int logged = 0;
         if (logged++ < 5) Log(1, "exception 0x%08lX in camera tools", GetExceptionCode());
