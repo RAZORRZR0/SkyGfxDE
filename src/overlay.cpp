@@ -73,7 +73,6 @@ static void ReleaseRtv() {
 // The frame is copied once, then drawn `passes` times as a full-screen strip quad (TL, TR, BL, BR) at alpha 36 with point
 // sampling and clamp, each pass shrinking the UV rectangle by shift * 0.0025 per side (a zoom) plus a per-frame random
 // wobble of wobble * 0.004 * rand()/32767, with the original's corner signs (BL's v uses the u wobble, as in 0x7030A0).
-// ponytail: drawn at Present, so DE's HUD is blurred too (the original ran before the HUD); needs a pre-UI hook to avoid.
 static ID3D11Texture2D* g_fxCopy = nullptr;
 static ID3D11ShaderResourceView* g_fxSrv = nullptr;
 static ID3D11VertexShader* g_fxVs = nullptr;
