@@ -2,6 +2,28 @@
 
 x64 ASI plugin for **GTA San Andreas – The Definitive Edition**. It brings back the PS2 look (in the spirit of [aap/skygfx](https://github.com/aap/skygfx)) on top of DE's modern renderer, so Unreal's dynamic shadows and volumetric clouds stay on. It also adds an in-game debug menu for weather, time, noclip and freecam.
 
+> Not affiliated with Rockstar Games, Grove Street Games or the skygfx authors. No game files are included; you need your own copy of the game.
+
+## Features at a glance
+
+- **PS2 colour filter**, driven by the timecyc (skygfx's `ColourFilter_PS2`), converted through Unreal's filmic curve so it matches skygfx on screen.
+- **PS2 timecyc support**: load the PS2 `colorcycle.dat` (or any 8/24-hour `timecyc.dat`) into DE's tables at runtime.
+- **Timecyc colours** for sky, fog, ambient, sun and clouds on DE's time-of-day actor.
+- **GTA-style distance fog** from the timecyc far clip, following the time of day, using DE's own GTA fog path.
+- **Darker PS2-style shadows** (indirect fill lowered by the timecyc shadow strength), with DE's dynamic shadow maps kept.
+- **Radiosity** (the PS2 glow), with DE's bloom turned down while it runs.
+- **SpeedFX** (the original speed blur), ported from the 1.0 exe, including nitro, looking behind/sideways and cutscenes.
+- **PS2 rain grain** and **neo water drops** on the lens (rain, splashes, boats, hydrants and fountains).
+- **Matte characters**: less plastic-looking ped skin, clothes and hair.
+- All post effects are drawn **before the HUD**, so the HUD stays sharp.
+- **Debug menu** (Dear ImGui): force or blend weather, set/freeze/speed up time, freecam, noclip. All keys are Ctrl+Shift chords, so it works on 60% keyboards.
+
+## Requirements
+
+- GTA San Andreas – The Definitive Edition, current Steam/Rockstar Games Launcher build (`SanAndreas.exe` SHA-256 `ed7545eb…ac1f0`). Other builds are refused safely (see *Build and check*).
+- An ASI loader, e.g. [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader).
+- Optional: the PS2 `colorcycle.dat` for the full PS2 colours (not included; it's Rockstar's data).
+
 ## Keys
 
 All defaults are Ctrl+Shift chords, so they work on 60% keyboards (no F-keys, arrows or numpad needed). You can rebind them under `[Keys]` in `SkyGfxDE.ini`.
@@ -80,7 +102,9 @@ DE keeps all 23 weathers, and its five region weather lists (Countryside, LA, SF
 ## Install
 
 1. You need an ASI loader for DE (e.g. Ultimate ASI Loader as `version.dll`/`dxgi.dll` in `Gameface\Binaries\Win64`).
-2. With the game closed (a running game locks the `.asi`), copy `bin\SkyGfxDE.asi` and `bin\SkyGfxDE.ini` to `<Game>\Gameface\Binaries\Win64\`.
+2. Download `SkyGfxDE.asi` and `SkyGfxDE.ini` from [Releases](../../releases) (or build them, see below). With the game closed (a running game locks the `.asi`), copy both to `<Game>\Gameface\Binaries\Win64\`.
+3. Optional, for the full PS2 colours: copy the PS2 version's `data\colorcycle.dat` next to the `.asi` as `timecyc_ps2.dat` and set `[Timecyc] File=timecyc_ps2.dat` in the ini.
+4. In the game, keep *Classic Atmosphere* off. Press Ctrl+Shift+M for the menu.
 
 `SkyGfxDE.log` (next to the `.asi`) logs every hook at startup. After that, every 10 s it logs the postfx colours, the applied gain, the shadow and indirect values, and the fog density (DE value → applied value).
 
@@ -96,11 +120,15 @@ Every address is found by signature. If a look signature doesn't match, nothing 
 
 | File | Contents |
 |---|---|
-| `src/core.cpp` | Config/ini, hotkeys, log, signature scanning, look hooks, Look tab |
-| `src/tools.cpp` | Weather/time/freecam/noclip hooks and World tab |
-| `src/overlay.cpp` | D3D11 Present/ResizeBuffers hooks, ImGui, input capture |
+| `src/core.cpp` | Config/ini, hotkeys, log, signature scanning, timecyc loader, look hooks (colour filter, colours, fog, shadows, bloom), Look tab |
+| `src/postfx.cpp` | D3D11 post effects: water drops, SpeedFX, radiosity, grain |
+| `src/tools.cpp` | Weather/time/freecam/noclip hooks, World tab, game state for the post effects (speed, rain, camera, splash hooks) |
+| `src/peds.cpp` | Matte characters (material scalar overrides through `ProcessEvent`) |
+| `src/overlay.cpp` | D3D11 Present/ResizeBuffers/OMSetRenderTargets hooks, ImGui, input capture |
 | `src/dllmain.cpp` | Entry point; installs the overlay from a worker thread |
+| `test/` | Offline check against the real exe, E2E game scripts and their artifacts |
 | `imgui/` | Dear ImGui 1.92 (MIT) with DX11/Win32 backends |
+| `minhook/` | MinHook (BSD 2-clause) |
 
 ## Reverse-engineering notes (DE x64)
 
@@ -134,3 +162,28 @@ Every address is found by signature. If a look signature doesn't match, nothing 
 | `UMaterialInstance` | `Parent` +0xD0, `ScalarParameterValues` +0xE0 (stride 0x24, value +0x10), resource +0x140 |
 | `SetScalarParameterValueInternal` / `GameThread_UpdateMIParameter` | `0x1433AADD0` / `0x1433BC7B0` (native body of `MaterialInstanceDynamic:SetScalarParameterValue`, thunk `0x14389D3B0`) |
 | Timecyc tables | `[8 hours][23 weathers]` byte arrays, RVAs in `kTimecycCols` (`core.cpp`) |
+
+## How it was made
+
+The Definitive Edition still runs the original game code (rewritten for x64) underneath Unreal Engine 4.26. Most of the work was finding the original game's functions and data in DE's executable and connecting them to Unreal's renderer:
+
+- **Finding things in DE.** DE has no symbols, so functions and globals were matched in IDA against the original game's layout from [gta-reversed](https://github.com/gta-reversed/gta-reversed). Examples: nitro through the unique `-0.000001` constant stored by `CAutomobile::NitrousControl`, cutscene and cull-zone flags through the `CTimeCycle` fog-reduction check, and the entry/exit state through its `!= 3 ? 0 : 4` reset. Every address is then found at runtime by a unique byte signature, and `test/offline_check.cpp` asserts them against the IDA values.
+- **Unreal side.** Class layouts (post-process settings, fog, time of day, materials) come from an SDK dump of the game made with [Dumper-7](https://github.com/Encryqed/Dumper-7).
+- **SpeedFX.** gta-reversed has the call site in `CPostEffects::Render` but not the blur itself, and skygfx calls the game's function. So the body (`0x7030A0`), its speed table (`0x8D5190`) and alpha were read from the 1.0 US `gta_sa.exe` in IDA and rebuilt as a D3D11 pass. To keep the HUD sharp, the backbuffer binds per frame were counted (DE binds it 3 times; the HUD is drawn after the second), and the effect runs just before that bind.
+- **Radiosity, grain, water drops, colour filter.** Ported from skygfx's source (`postfx.cpp`, `neoWaterdrops.cpp`), with the original game's values, to D3D11 shaders.
+- **Checks.** A WARP (software D3D11) harness checked the effects pixel by pixel during development; the E2E scripts in `test/` launch the real game and check its log.
+
+## Credits
+
+- **[aap](https://github.com/aap)** and the contributors of **[skygfx](https://github.com/aap/skygfx)**: the PS2 colour filter formula, radiosity, PS2 grain, the neo water drops, and the research into the PS2 look that this project is built on. The water drop simulation in `src/postfx.cpp` follows skygfx's `neoWaterdrops.cpp` closely.
+- **The [gta-reversed](https://github.com/gta-reversed/gta-reversed) team**: the reversed original code (`CPostEffects::Render`, `CTimeCycle`, `CWeather`, `CColourSet`, `CEntryExitManager`, camera and weather layouts) used to find everything in DE.
+- **Rockstar North** for the original game, its PS2 look and its timecyc; **Grove Street Games** for the Definitive Edition.
+- **[Encryqed](https://github.com/Encryqed)** for [Dumper-7](https://github.com/Encryqed/Dumper-7), used to dump DE's Unreal classes.
+- **[Omar Cornut](https://github.com/ocornut)** and contributors for [Dear ImGui](https://github.com/ocornut/imgui) (MIT, `imgui/LICENSE.txt`).
+- **[Tsuda Kageyu](https://github.com/TsudaKageyu)** for [MinHook](https://github.com/TsudaKageyu/minhook) (BSD 2-clause, `minhook/LICENSE.txt`).
+- **[ThirteenAG](https://github.com/ThirteenAG)** for [Ultimate ASI Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader).
+- **[Hex-Rays](https://hex-rays.com/)** IDA, used for all the reverse engineering.
+
+## License
+
+The original code in this repository is under the MIT license (`LICENSE`). Dear ImGui and MinHook keep their own licenses. Logic ported from skygfx and gta-reversed remains credited to their authors above; neither project publishes a license, so if you are one of those authors and want something changed or removed, please open an issue.
