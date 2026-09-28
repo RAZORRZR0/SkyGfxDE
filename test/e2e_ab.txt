@@ -1,0 +1,2 @@
+PASS shadow darkness 0 -> 0.9 darkens the frame
+FAIL matte 0 -> 1 changes the characters

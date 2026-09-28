@@ -294,6 +294,7 @@ namespace TOD { // AGTATimeOfDay
 constexpr size_t LiveColors = 0x2B8;    // SkyColorSet (used by the renderer)
 constexpr size_t TargetColors = 0x458;  // written by CTimeCycle::Update, copied to LiveColors
 constexpr size_t OfSingleton = 0x688;   // AGTATimeOfDay* in DE's engine singleton
+constexpr size_t SkyLightIntensity = 0x66C; // float, sky light intensity (x SkylightColor alpha)
 constexpr size_t VgdOverrideClass = 0x4770; // TSubclassOf<AVGDOverrideData>: DE's GTA fog StartDistance source
 }
 constexpr size_t UCLASS_CDO = 0x118;          // UClass::ClassDefaultObject
@@ -303,10 +304,7 @@ constexpr size_t Settings = 0x260;
 constexpr size_t OverrideByte0 = 0x00;  // bit 2 ColorSaturation, bit 3 ColorContrast, bit 5 ColorGain
 constexpr uint8_t SaturationBit = 0x04, ContrastBit = 0x08, ColorGainBit = 0x20;
 constexpr uint8_t GradeBits = SaturationBit | ContrastBit | ColorGainBit;
-constexpr size_t OverrideByte16 = 0x16; // bit 0 = bOverride_IndirectLightingIntensity
-constexpr uint8_t IndirectBit = 0x01;
 constexpr size_t ColorSaturation = 0x30, ColorContrast = 0x40, ColorGain = 0x60; // FVector4
-constexpr size_t IndirectLightingIntensity = 0x464;
 constexpr size_t OverrideByte6 = 0x06;  // bit 2 = bOverride_BloomIntensity
 constexpr uint8_t BloomBit = 0x04;
 constexpr size_t BloomIntensity = 0x21C; // float, UE default 0.675
@@ -316,6 +314,7 @@ namespace FOG { // AGTAHeightFog / UExponentialHeightFogComponent
 constexpr size_t Component = 0x2A8;     // AGTAHeightFog::HeightFogComponent
 constexpr size_t Tod = 0x2B0;           // AGTAHeightFog::TimeOfDayActor
 constexpr size_t InscatterColor = 0x20C; // component FogInscatteringColor (FLinearColor)
+constexpr size_t DirInscatterColor = 0x24C; // component DirectionalInscatteringColor (FLinearColor)
 constexpr size_t Density = 0x1F8;       // FogDensity (DE: FogParameters.x)
 constexpr size_t SecondDensity = 0x200; // SecondFogData.FogDensity (DE: fixed 0.02 ground layer)
 constexpr size_t UseGtaValues = 0x2A0;  // AGTAHeightFog::bUseGTAValues: DE's timecyc fog path (as in Classic)
@@ -505,7 +504,6 @@ struct Volume {
     uint8_t* obj; int32_t index, serial;
     float deGain[4], deSat[4], deContrast[4]; // DE's own values (brightness/contrast options), after UpdateColorOptions
     uint8_t deOverride0;                       // DE's override bits in byte 0
-    bool origIndirectOverride; float origIndirect;
     bool origBloomOverride; float origBloom;
 };
 static Volume g_volumes[64];
@@ -552,15 +550,6 @@ static void WriteVolume(Volume& v) {
     const uint8_t bits = on ? (uint8_t)(v.deOverride0 | PP::GradeBits) : v.deOverride0;
     s[PP::OverrideByte0] = (uint8_t)((s[PP::OverrideByte0] & ~PP::GradeBits) | (bits & PP::GradeBits));
 
-    float* indirect = (float*)(s + PP::IndirectLightingIntensity);
-    if (on && g_cfg.shadowDarkness > 0.0f && !v.obj[PP::IsInterior]) {
-        s[PP::OverrideByte16] |= PP::IndirectBit;
-        *indirect = (v.origIndirectOverride ? v.origIndirect : 1.0f) * g_indirect;
-    } else {
-        if (v.origIndirectOverride) s[PP::OverrideByte16] |= PP::IndirectBit;
-        else s[PP::OverrideByte16] &= (uint8_t)~PP::IndirectBit;
-        *indirect = v.origIndirect;
-    }
     // The PS2 had no bloom: radiosity is its glow, so DE's bloom is scaled by DEBloom while radiosity is on.
     float* bloom = (float*)(s + PP::BloomIntensity);
     if (on && g_cfg.radiosity) {
@@ -582,8 +571,6 @@ static Volume* TrackVolume(uint8_t* obj) {
     Volume& v = g_volumes[g_volumeCount++];
     const uint8_t* s = obj + PP::Settings;
     v.obj = obj; v.index = index; v.serial = *(int32_t*)(item + 0x10);
-    v.origIndirectOverride = (s[PP::OverrideByte16] & PP::IndirectBit) != 0;
-    v.origIndirect = v.origIndirectOverride ? *(const float*)(s + PP::IndirectLightingIntensity) : 1.0f;
     v.origBloomOverride = (s[PP::OverrideByte6] & PP::BloomBit) != 0;
     v.origBloom = *(const float*)(s + PP::BloomIntensity);
     const bool filmBits[5] = { (s[4] & 0x80) != 0, (s[5] & 1) != 0, (s[5] & 2) != 0, (s[5] & 4) != 0, (s[5] & 8) != 0 };
@@ -676,17 +663,27 @@ static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
         const float wantSecond = gtaOn || modernOn ? *second * g_cfg.groundHaze : *second;
         g_look.fogDensityApplied = wantMain;
         g_look.gtaFog = gtaFog;
-        // GTA fog colour: DE's GTA path copies one static classic colour, which glows at night. Use the time-of-day
-        // sky fog colour instead, the way DE's modern path does (rgb x a, a^2), so it darkens with the clock.
+        // GTA fog colour: as in the original, where the fog colour is the timecyc sky bottom (the colour the sky dome
+        // fades to at the horizon, CClouds::RenderSkyPolys), it is the time-of-day SkyLower colour (rgb x a, a^2,
+        // as DE's modern path does with its fog colour), so the fogged distance matches the horizon. DE's sun-coloured
+        // directional inscattering (the original had none) is turned off, restored when GTA fog is off.
         float* col = (float*)(comp + FOG::InscatterColor);
+        float* dir = (float*)(comp + FOG::DirInscatterColor);
+        static float deDir[4];
         memcpy(lastDeCol, col, 16);
-        float wantCol[4];
+        float wantCol[4], wantDir[4];
         memcpy(wantCol, col, 16);
+        memcpy(wantDir, dir, 16);
         const uint8_t* tod = *(uint8_t**)(actor + FOG::Tod);
         if (gtaOn && tod) {
-            const float* f = (const float*)(tod + TOD::LiveColors + SCS::Fog);
+            const float* f = (const float*)(tod + TOD::LiveColors + SCS::SkyLower);
             wantCol[0] = f[0] * f[3]; wantCol[1] = f[1] * f[3]; wantCol[2] = f[2] * f[3]; wantCol[3] = f[3] * f[3];
+            if (dir[0] + dir[1] + dir[2] > 0.0f) memcpy(deDir, dir, 16);
+            wantDir[0] = wantDir[1] = wantDir[2] = 0.0f;
+        } else if (dir[0] + dir[1] + dir[2] == 0.0f) {
+            memcpy(wantDir, deDir, 16);
         }
+        if (memcmp(wantDir, dir, 16)) { memcpy(dir, wantDir, 16); g_MarkRenderStateDirty(comp); }
         if (wantMain != *density || wantSecond != *second || memcmp(wantCol, col, 16)) {
             *density = wantMain;
             *second = wantSecond;
@@ -750,6 +747,18 @@ static void PerFrame() {
     const bool classic = g_classicFlag && *g_classicFlag;
     uint8_t* tod = *g_singleton ? *(uint8_t**)(*g_singleton + TOD::OfSingleton) : nullptr;
     if (g_active && tod && !classic) ApplyColours(tod, cc);
+    // Shadows: the light filling shadowed areas is DE's sky light. Its update (0x140BBF6D0) sets the component's
+    // intensity to AGTATimeOfDay::SkyLightIntensity (+0x66C) x the live SkylightColor alpha; the alpha is rewritten
+    // by DE after this hook, so SkyLightIntensity is scaled by 1 - Darkness x timecyc shadow strength (the original
+    // drew shadows at that alpha). DE's own value is kept and restored; a value DE writes is taken as the new one.
+    static float* skyP = nullptr;
+    static float skyDE = 0.0f, skyWritten = NAN;
+    float* sp = tod ? (float*)(tod + TOD::SkyLightIntensity) : nullptr;
+    if (sp != skyP) { if (skyP) *skyP = skyDE; skyP = sp; if (sp) skyDE = *sp; skyWritten = NAN; }
+    if (sp) {
+        if (*sp != skyWritten) skyDE = *sp;
+        *sp = skyWritten = g_active && !classic ? skyDE * g_indirect : skyDE;
+    }
     // GTA fog: fog starts at half the scaled timecyc far clip. The original's fog started near 0 m (timecyc fog start
     // median 10 m), too thick for DE's full-distance world. DE copies StartDistance every frame from its fog override
     // data (class default object + 0x220), so the value is written at that source; restored when GTA fog is off.
@@ -972,7 +981,7 @@ void LookPanel() {
     }
     if (ImGui::CollapsingHeader("Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::SliderFloat("Darkness", &g_cfg.shadowDarkness, 0.0f, 0.9f);
-        ImGui::Text("indirect light x%.2f  (%d post-process volumes)", g_look.indirect, g_look.volumes);
+        ImGui::Text("shadow fill (sky light, uplighting) x%.2f  (%d post-process volumes)", g_look.indirect, g_look.volumes);
     }
     if (ImGui::CollapsingHeader("Characters", ImGuiTreeNodeFlags_DefaultOpen)) PedsPanel();
     if (ImGui::CollapsingHeader("Post effects", ImGuiTreeNodeFlags_DefaultOpen)) {
