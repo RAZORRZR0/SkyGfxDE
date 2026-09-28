@@ -21,6 +21,7 @@ CCamera::Process                 rva=0x111B2E0
 CClock::Update tick              rva=0x1146764
 CTimeCycle::Update               rva=0x1182230
 TimeCycle fog reduction          rva=0x11839DA
+EntryExit state reset            rva=0x1085284
 Minutes                          rva=0x521270F
 Seconds                          rva=0x522A584
 NewWeatherType                   rva=0x52FFFF0
@@ -41,9 +42,15 @@ CWeather::UnderWaterness         rva=0x572AEE0
 CGame::currArea                  rva=0x572A450
 CCullZones flags (player)        rva=0x5313544
 CCullZones flags (camera)        rva=0x5313548
+CEntryExitManager::ms_exitEnterState rva=0x51B4A28
 water_splash_big FX              rva=0xAE7C60
 water_splash FX                  rva=0xAE7E60
 water_splsh_sml FX               rva=0xAE8020
+hydrant/fountain audio event     rva=0x1005E30
+FxSystem_c::AddParticle          rva=0xAEFA60
+Fx_c::prt_boatsplash             rva=0x5379778
+Fx_c::prt_wake                   rva=0x53797F8
+Fx_c::prt_watersplash            rva=0x5379800
 ok   tool anchor CWeather::Update at 0x12903B0
 ok   tool anchor CClock::SetGameClock at 0x112B980
 ok   tool anchor CWeather::FindWeatherTypesList at 0x1291330
@@ -75,6 +82,13 @@ ok   tool anchor CCullZones flags (camera) at 0x5313548
 ok   tool anchor water_splash_big FX at 0xAE7C60
 ok   tool anchor water_splash FX at 0xAE7E60
 ok   tool anchor water_splsh_sml FX at 0xAE8020
+ok   tool anchor EntryExit state reset at 0x1085284
+ok   tool anchor CEntryExitManager::ms_exitEnterState at 0x51B4A28
+ok   tool anchor hydrant/fountain audio event at 0x1005E30
+ok   tool anchor FxSystem_c::AddParticle at 0xAEFA60
+ok   tool anchor Fx_c::prt_boatsplash at 0x5379778
+ok   tool anchor Fx_c::prt_wake at 0x53797F8
+ok   tool anchor Fx_c::prt_watersplash at 0x5379800
 ok   timecyc.dat loaded into the tables
 table checksum=0x63A2CAE7
 ok   midnight/weather 0 ambient matches the file

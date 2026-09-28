@@ -41,6 +41,8 @@ static uint32_t* g_zoneFlagsA = nullptr;   // CCullZones current flags (player /
 static uint32_t* g_zoneFlagsB = nullptr;   //  both are only ever ORed): bit 3 = no rain
 FxState g_fx{};
 volatile int g_splash = -1;
+volatile LONG g_dropFill = 0;               // float bits: WaterDrops::FillScreenMoving amount queued for the render thread
+static int32_t*  g_exitEnterState = nullptr; // CEntryExitManager::ms_exitEnterState (0 = no interior transition)
 
 typedef uintptr_t (*Void_Fn)(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
 typedef void (*SetGameClock_Fn)(uint8_t hours, uint8_t minutes, uint8_t day);
@@ -302,8 +304,8 @@ static void SpeedFxRowUpdate() {
     g_fx.grain = grain;
     // Water drops (skygfx WaterDrops::NoDrops / NoRain / CalculateMovement / Render); modes 1 and 54 are top-down,
     // 16 is MODE_1STPERSON; looking behind/left/right from a 1st-person car (direction != 3, forward) stops them.
-    // ponytail: CEntryExitManager::ms_exitEnterState is not read, drops are not cleared on entry/exit fades.
-    g_fx.noDrops = under > 0.339731634f;
+    // NoDrops also covers the entry/exit fade (ms_exitEnterState != 0): the drops are cleared.
+    g_fx.noDrops = under > 0.339731634f || *g_exitEnterState != 0;
     g_fx.noRain = noRainZone || *g_currArea != 0 || g_fx.noDrops;
     g_fx.firstPerson = mode == 16;
     g_fx.dropsEnabled = mode != 1 && mode != 54 && !(mode == 16 && veh && look != 3);
@@ -318,15 +320,52 @@ typedef void* (*SplashSmall_Fn)(void*, const float*, char);
 static SplashBig_Fn o_SplashBig = nullptr;
 static Splash_Fn o_Splash = nullptr;
 static SplashSmall_Fn o_SplashSmall = nullptr;
-static void RegisterSplash(const float* p) {
+static float CamDist(const float* p) {
     const float* c = g_fx.cam + 12;
-    if (!g_cfg.waterDrops || !p) return;
     const float dx = p[0] - c[0], dy = p[1] - c[1], dz = p[2] - c[2];
-    if (dx * dx + dy * dy + dz * dz <= 10.0f * 10.0f) g_splash = 1;
+    return sqrtf(dx * dx + dy * dy + dz * dz);
 }
-static void* Hooked_SplashBig(void* a, const float* p) { RegisterSplash(p); return o_SplashBig(a, p); }
-static void* Hooked_Splash(void* a, const float* p, float s) { RegisterSplash(p); return o_Splash(a, p, s); }
-static void* Hooked_SplashSmall(void* a, const float* p, char s) { RegisterSplash(p); return o_SplashSmall(a, p, s); }
+static void RegisterSplash(const float* p, int duration) { // skygfx: within 10 m of the camera
+    if (g_cfg.waterDrops && p && CamDist(p) <= 10.0f) g_splash = duration;
+}
+static void* Hooked_SplashBig(void* a, const float* p) { RegisterSplash(p, 1); return o_SplashBig(a, p); }
+static void* Hooked_Splash(void* a, const float* p, float s) { RegisterSplash(p, 1); return o_Splash(a, p, s); }
+static void* Hooked_SplashSmall(void* a, const float* p, char s) { RegisterSplash(p, 1); return o_SplashSmall(a, p, s); }
+
+// Hydrants and fountains: DE's particle-audio callback (FX_water_hydrant / FX_water_fountain / FX_water_fnt_tme) is
+// the only caller of this audio-event function (event 137, pos in metres), as skygfx's hooked CAEFireAudioEntity
+// calls: RegisterSplash(point, 20.0f, 20) when within 10 m.
+typedef void* (*WaterAudio_Fn)(void*, int, const float*, uintptr_t);
+static WaterAudio_Fn o_WaterAudio = nullptr;
+static void* Hooked_WaterAudio(void* a, int ev, const float* p, uintptr_t r9) {
+    RegisterSplash(p, 20);
+    return o_WaterAudio(a, ev, p, r9);
+}
+
+// Boat splash, wake and water splash particles (FxSystem_c::AddParticle, this = Fx_c's prt_* system, pos in
+// metres): skygfx fills the screen with 1 / (dist / 2) when within 40 / 10 / 30 m. Blood is not ported.
+typedef void* (*AddParticle_Fn)(void*, const float*, void*, float, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+static AddParticle_Fn o_AddParticle = nullptr;
+static void** g_prtBoatSplash = nullptr;  // Fx_c::prt_boatsplash
+static void** g_prtWake = nullptr;        // Fx_c::prt_wake
+static void** g_prtWaterSplash = nullptr; // Fx_c::prt_watersplash
+static void* Hooked_AddParticle(void* sys, const float* p, void* v, float f, uintptr_t a, uintptr_t b, uintptr_t c,
+                                uintptr_t d, uintptr_t e, uintptr_t g) {
+    const float range = sys == *g_prtBoatSplash ? 40.0f : sys == *g_prtWake ? 10.0f : sys == *g_prtWaterSplash ? 30.0f : 0.0f;
+    if (range > 0.0f && g_cfg.waterDrops && p) {
+        const float dist = fmaxf(CamDist(p), 0.1f);
+        if (dist <= range) {
+            LONG o, n;
+            do { // g_dropFill += 2 / dist (float bits)
+                o = g_dropFill;
+                float amount; memcpy(&amount, &o, 4);
+                amount += 2.0f / dist;
+                memcpy(&n, &amount, 4);
+            } while (InterlockedCompareExchange(&g_dropFill, n, o) != o);
+        }
+    }
+    return o_AddParticle(sys, p, v, f, a, b, c, d, e, g);
+}
 
 static uintptr_t Hooked_CameraProcess(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d) {
     const uintptr_t r = o_CameraProcess(a, b, c, d);
@@ -420,7 +459,7 @@ void ToolsPanel() {
 
 // ---------------------------------------------------------------- install
 struct Anchor { const char* name; uint8_t* base; size_t off; const uint8_t* op; size_t opLen, len; void* out; };
-static struct { const char* name; const void* addr; } g_resolved[40];
+static struct { const char* name; const void* addr; } g_resolved[64];
 static int g_resolvedCount = 0;
 static void Resolved(const char* name, const void* addr) {
     if (g_resolvedCount < (int)(sizeof(g_resolved) / sizeof(g_resolved[0]))) g_resolved[g_resolvedCount++] = { name, addr };
@@ -443,11 +482,14 @@ bool InstallTools() {
     uint8_t* tu = FindUnique("4C 8B DC 55 56 49 8D 6B A1 48 81 EC C8 00 00 00 45 0F 29 4B A8 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 D7");
     // CTimeCycle::CalcColoursForPoint fog reduction: !bScriptsForceRain && (PlayerNoRain || CamNoRain || ms_running)
     uint8_t* fr = FindUnique("80 3D ?? ?? ?? ?? 00 75 ?? F6 05 ?? ?? ?? ?? 08 75 ?? F6 05 ?? ?? ?? ?? 08 75 ?? 80 3D ?? ?? ?? ?? 00");
+    // CEntryExitManager::Update: ms_exitEnterState = ms_exitEnterState != 3 ? 0 : 4
+    uint8_t* ee = FindUnique("83 3D ?? ?? ?? ?? 03 B8 04 00 00 00 44 0F 44 F8 44 89 3D");
     const char* names[] = { "CWeather::Update", "CClock::SetGameClock", "CWeather::FindWeatherTypesList", "FindPlayerEntity",
-                            "CCamera::Process", "CClock::Update tick", "CTimeCycle::Update", "TimeCycle fog reduction" };
-    uint8_t* found[] = { wu, sc, fl, fpe, cp, ct, tu, fr };
+                            "CCamera::Process", "CClock::Update tick", "CTimeCycle::Update", "TimeCycle fog reduction",
+                            "EntryExit state reset" };
+    uint8_t* found[] = { wu, sc, fl, fpe, cp, ct, tu, fr, ee };
     bool ok = true;
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < 9; ++i) {
         Log(found[i] ? 2 : 1, "tools sig %-32s %p%s", names[i], found[i], found[i] ? "" : "  <-- NOT FOUND");
         ok &= found[i] != nullptr;
         if (found[i]) Resolved(names[i], found[i]);
@@ -481,6 +523,7 @@ bool InstallTools() {
         { "CGame::currArea", wu, 0x1BF, cmpDword, 2, 7, &g_currArea },          //  ... || currArea != 0
         { "CCullZones flags (player)", fr, 0x9, testByte, 2, 7, &g_zoneFlagsA },
         { "CCullZones flags (camera)", fr, 0x12, testByte, 2, 7, &g_zoneFlagsB },
+        { "CEntryExitManager::ms_exitEnterState", ee, 0x0, cmpDword, 2, 7, &g_exitEnterState },
     };
     for (const Anchor& a : anchors) {
         uint8_t* p = RipAt(a.base + a.off, a.op, a.opLen, a.len);
@@ -505,6 +548,25 @@ bool InstallTools() {
                         MH_CreateHook(sp, (void*)&Hooked_Splash, (void**)&o_Splash) == MH_OK &&
                         MH_CreateHook(ss, (void*)&Hooked_SplashSmall, (void**)&o_SplashSmall) == MH_OK;
     Log(1, "water drops: splash FX hooks %s", splash ? "ready" : "NOT found (rain drops only)");
+    uint8_t* wa = FindUnique("48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 55 41 54 41 55 41 56 41 57 48 8D 68 A1 48 81 EC E0 00 00 00 F3 0F 10 05 ?? ?? ?? ?? 45 33 F6 0F 29 70 C8 49 8B D8");
+    if (wa) Resolved("hydrant/fountain audio event", wa);
+    const bool hydrant = wa && MH_CreateHook(wa, (void*)&Hooked_WaterAudio, (void**)&o_WaterAudio) == MH_OK;
+    Log(1, "water drops: hydrant/fountain hook %s", hydrant ? "ready" : "NOT found");
+    uint8_t* ap = FindUnique("48 8B C4 4C 89 40 18 55 53 57 41 54 41 55 48 8D 68 C9 48 81 EC F0 00 00 00 F3 0F 10 02 49 8B F8");
+    uint8_t* fr2 = FindUnique("40 53 48 83 EC 30 48 89 74 24 48 48 8B 35 ?? ?? ?? ?? 4C 89 64 24 58 45 33 E4 48 85 F6 0F 84");
+    static const uint8_t movRdx[] = { 0x48, 0x8B, 0x15 };
+    if (fr2) { // Fx_c system release: mov rdx, cs:prt_* in declaration order
+        g_prtBoatSplash = (void**)RipAt(fr2 + 0x18C, movRdx, 3, 7);
+        g_prtWake = (void**)RipAt(fr2 + 0x24C, movRdx, 3, 7);
+        g_prtWaterSplash = (void**)RipAt(fr2 + 0x258, movRdx, 3, 7);
+    }
+    if (ap) Resolved("FxSystem_c::AddParticle", ap);
+    if (g_prtBoatSplash) Resolved("Fx_c::prt_boatsplash", g_prtBoatSplash);
+    if (g_prtWake) Resolved("Fx_c::prt_wake", g_prtWake);
+    if (g_prtWaterSplash) Resolved("Fx_c::prt_watersplash", g_prtWaterSplash);
+    const bool particles = ap && g_prtBoatSplash && g_prtWake && g_prtWaterSplash &&
+                           MH_CreateHook(ap, (void*)&Hooked_AddParticle, (void**)&o_AddParticle) == MH_OK;
+    Log(1, "water drops: boat splash / wake particle hook %s", particles ? "ready" : "NOT found");
     g_toolsOk = ok;
     Log(1, "debug tools %s", ok ? "ready" : "hook creation FAILED");
     return ok;

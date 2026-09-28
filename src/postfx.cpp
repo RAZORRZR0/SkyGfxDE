@@ -27,7 +27,7 @@ static const char kHlsl[] =
     "float4 thresh(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {\n"
     "  return float4(saturate(2 * saturate(T.Sample(S, uv).rgb - p.x)), 1); }\n"
     // PS2 grain: colour ignored (white), alpha MODULATE2X; blended DESTCOLOR/SRCALPHA = dst * (1 + 2a)
-    "float4 grain(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return float4(1, 1, 1, 2 * T.Sample(S, uv).r); }\n"
+    "float4 grain(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return float4(1, 1, 1, 2 * T.Sample(S, uv).r * p.x); }\n"
     // neo water drops: pixel positions, uv0 = drop mask, uv1 = frame (a flipped, wider window: the drop acts as a lens)
     "void vsDrop(float2 xy : POSITION, float4 col : COLOR, float4 uv : TEXCOORD0,\n"
     "            out float4 pos : SV_Position, out float4 c : COLOR, out float4 uvo : TEXCOORD0) {\n"
@@ -235,8 +235,8 @@ static void Radiosity(IDXGISwapChain* sc) {
     if (!g_cfg.radiosity || !g_curColours) return;
     const int limit = *(const int32_t*)(g_curColours + 0x9C) * 128 / 255; // CColourSet::m_nHighLightMinIntensity
     Grab(sc);
-    Rect(g_rad[0].rtv, g_rad[0].w, g_rad[0].h, g_copy.srv, g_ps, nullptr, g_linear, 6.0f / 640, 6.0f / 448, 1 + 6.0f / 640,
-         1 + 6.0f / 448, 1);
+    const float ou = g_cfg.radiosityOffset / 640, ov = g_cfg.radiosityOffset / 448;
+    Rect(g_rad[0].rtv, g_rad[0].w, g_rad[0].h, g_copy.srv, g_ps, nullptr, g_linear, ou, ov, 1 + ou, 1 + ov, 1);
     for (int i = 1; i < g_radN; ++i)
         Rect(g_rad[i].rtv, g_rad[i].w, g_rad[i].h, g_rad[i - 1].srv, g_ps, nullptr, g_linear, 0, 0, 1, 1, 1);
     const Rt& th = g_rad[g_radN];
@@ -249,7 +249,7 @@ static void Radiosity(IDXGISwapChain* sc) {
 // PS2), regenerated every frame, tiled 5 x 7 times per 640x448 and blended as dst * (1 + 2 * alpha).
 static void Grain() {
     const int mask = g_fx.grain;
-    if (!g_cfg.grain || mask <= 0) return;
+    if (!g_cfg.grain || mask <= 0 || g_cfg.grainStrength <= 0) return;
     D3D11_MAPPED_SUBRESOURCE m;
     if (FAILED(C->Map(g_grainTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) return;
     uint32_t r = 0x3F800000 | (rand() & 0x007FFFFF); // vrinit
@@ -259,14 +259,14 @@ static void Grain() {
             r = ((r << 1) ^ ((r >> 4) & 1) ^ ((r >> 22) & 1)) & 0x7FFFFF | 0x3F800000; // vradvance
         }
     C->Unmap(g_grainTex, 0);
-    Rect(g_back, W, H, g_grainSrv, g_psGrain, g_grainBlend, g_wrap, 0, 0, 5.0f * W / 640, 7.0f * H / 448, 0);
+    Rect(g_back, W, H, g_grainSrv, g_psGrain, g_grainBlend, g_wrap, 0, 0, 5.0f * W / 640, 7.0f * H / 448, g_cfg.grainStrength);
 }
 
 // ---------------------------------------------------------------- neo water drops (skygfx neoWaterdrops.cpp)
 // Simulated at a fixed 30 Hz (the original's per-frame steps assume ~30 fps); positions and sizes in backbuffer pixels,
 // scaled by height/480 as in skygfx. The drop mask is drawn procedurally (skygfx loads "dropmask" from neo.txd).
-// ponytail: drops come from rain and DE's water splash FX only; skygfx's boat splash/wake particles, hydrants and
-// blood (neoBloodDrops, off by default) sources are not hooked.
+// Sources (tools.cpp): rain, DE's water splash FX, boat splash / wake / water splash particles, hydrants and
+// fountains. Blood drops (skygfx neoBloodDrops, off by default) are not ported.
 struct Drop { float x, y, time, size, uvsize, ttl; uint8_t alpha; bool active, fades; };
 struct DropMoving { Drop* drop; float dist; };
 static Drop g_drops[MAXDROPS];
@@ -358,6 +358,9 @@ static void DropsTick() { // WaterDrops::Process at 30 Hz
         if (g_numDrops < MAXDROPS) FillScreenMoving(1.0f);
         --g_splashDuration;
     }
+    const LONG bits = InterlockedExchange(&g_dropFill, 0); // boat splash / wake / water splash particles
+    float fill; memcpy(&fill, &bits, 4);
+    if (fill > 0.0f) FillScreenMoving(fill);
     // ProcessMoving
     if (g_dropsEnabled)
         for (DropMoving& m : g_moving)

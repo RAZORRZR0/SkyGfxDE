@@ -120,8 +120,10 @@ void ReadIni() {
     c.speedFxTestMode     = GetPrivateProfileIntA("SpeedFX", "TestMode", 0, ini) != 0;
     c.radiosity           = GetPrivateProfileIntA("Radiosity", "Enabled", 1, ini) != 0;
     c.radiosityIntensity  = (int)Clamp((float)GetPrivateProfileIntA("Radiosity", "Intensity", 35, ini), 0.0f, 255.0f);
+    c.radiosityOffset     = Clamp(IniFloat("Radiosity", "Offset", 6.0f), 0.0f, 12.0f);
     c.deBloom             = Clamp(IniFloat("Radiosity", "DEBloom", 0.0f), 0.0f, 1.0f);
     c.grain               = GetPrivateProfileIntA("Grain", "Enabled", 1, ini) != 0;
+    c.grainStrength       = Clamp(IniFloat("Grain", "Strength", 1.0f), 0.0f, 2.0f);
     c.waterDrops          = GetPrivateProfileIntA("WaterDrops", "Enabled", 1, ini) != 0;
     c.pedMatte            = Clamp(IniFloat("Characters", "Matte", 0.6f), 0.0f, 1.0f);
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 1.0f, 500.0f);
@@ -163,8 +165,10 @@ bool SaveIni() {
     WritePrivateProfileStringA("Radiosity", "Enabled", c.radiosity ? "1" : "0", g_iniPath);
     snprintf(hb, sizeof(hb), "%d", c.radiosityIntensity);
     WritePrivateProfileStringA("Radiosity", "Intensity", hb, g_iniPath);
+    PutFloat("Radiosity", "Offset", c.radiosityOffset);
     PutFloat("Radiosity", "DEBloom", c.deBloom);
     WritePrivateProfileStringA("Grain", "Enabled", c.grain ? "1" : "0", g_iniPath);
+    PutFloat("Grain", "Strength", c.grainStrength);
     WritePrivateProfileStringA("WaterDrops", "Enabled", c.waterDrops ? "1" : "0", g_iniPath);
     PutFloat("Characters", "Matte", c.pedMatte);
     PutFloat("Tools", "FreecamSpeed", c.freecamSpeed);
@@ -979,6 +983,8 @@ void LookPanel() {
         ImGui::SameLine();
         ImGui::Checkbox("Water drops", &g_cfg.waterDrops);
         ImGui::SliderInt("Radiosity intensity", &g_cfg.radiosityIntensity, 0, 255);
+        ImGui::SliderFloat("Radiosity offset (PS2 px)", &g_cfg.radiosityOffset, 0.0f, 12.0f, "%.1f");
+        ImGui::SliderFloat("Grain strength", &g_cfg.grainStrength, 0.0f, 2.0f);
         ImGui::SliderFloat("DE bloom (with radiosity)", &g_cfg.deBloom, 0.0f, 1.0f);
         ImGui::Text("highlight limit %d, rain %.2f, grain mask %d", g_curColours ? *(const int32_t*)(g_curColours + 0x9C) : -1,
                     g_fx.rain, g_fx.grain);

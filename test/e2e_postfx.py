@@ -51,6 +51,7 @@ def main():
         log = f.read()
     checks += [
         ("tools and splash hooks ready", "debug tools ready" in log and "splash FX hooks ready" in log),
+        ("hydrant/fountain and particle hooks ready", "hydrant/fountain hook ready" in log and "wake particle hook ready" in log),
         ("post effects created", "postfx:" not in log),
         ("drawn before the HUD bind", re.search(r"binds per frame over 600 frames: .*3:(\d+)", log) is not None),
         ("no exceptions", "exception" not in log),

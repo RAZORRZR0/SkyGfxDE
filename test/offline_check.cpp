@@ -60,6 +60,9 @@ static const struct { const char* name; uint32_t rva; } kExpected[] = {
     { "CWeather::Rain", 0x531A1DC }, { "CWeather::UnderWaterness", 0x572AEE0 }, { "CGame::currArea", 0x572A450 },
     { "CCullZones flags (player)", 0x5313544 }, { "CCullZones flags (camera)", 0x5313548 },
     { "water_splash_big FX", 0xAE7C60 }, { "water_splash FX", 0xAE7E60 }, { "water_splsh_sml FX", 0xAE8020 },
+    { "EntryExit state reset", 0x1085284 }, { "CEntryExitManager::ms_exitEnterState", 0x51B4A28 },
+    { "hydrant/fountain audio event", 0x1005E30 }, { "FxSystem_c::AddParticle", 0xAEFA60 },
+    { "Fx_c::prt_boatsplash", 0x5379778 }, { "Fx_c::prt_wake", 0x53797F8 }, { "Fx_c::prt_watersplash", 0x5379800 },
 };
 
 int main(int argc, char** argv) {

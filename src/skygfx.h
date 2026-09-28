@@ -41,8 +41,10 @@ struct Config {
     bool  speedFxTestMode = false; // CPostEffects::m_bSpeedFXTestMode: full effect (input 1.0) always
     bool  radiosity = true;        // CPostEffects::Radiosity, PS2 highlight glow (limit = timecyc highlight column)
     int   radiosityIntensity = 35; // m_RadiosityIntensity (gta_sa.exe 0x8D5118)
+    float radiosityOffset = 6.0f;  // glow offset up-left in PS2 pixels ((2^passes - 1) * correction 2 = 6 on the PS2)
     float deBloom = 0.0f;          // DE's BloomIntensity multiplier while radiosity is on (the PS2 had no bloom)
     bool  grain = true;            // PS2 rain grain (CPostEffects::Render rain branch, skygfx Grain_PS2)
+    float grainStrength = 1.0f;    // grain alpha multiplier (1 = PS2)
     bool  waterDrops = true;       // skygfx neo water drops on the lens (rain, water splashes)
     // characters: roughness towards 1, specular x(1 - matte) on DE's glossy ped materials
     float pedMatte = 0.6f;
@@ -76,6 +78,7 @@ struct FxState {
 };
 extern FxState g_fx;
 extern volatile int g_splash;  // WaterDrops::ms_splashDuration request from DE's water splash FX (game thread)
+extern volatile LONG g_dropFill; // WaterDrops::FillScreenMoving amount (float bits) from boat splash / wake particles
 extern char g_dir[MAX_PATH];
 extern char g_iniPath[MAX_PATH];
 
