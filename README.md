@@ -16,6 +16,7 @@ x64 ASI plugin for **GTA San Andreas – The Definitive Edition**. It brings bac
 - **PS2 rain grain** and **neo water drops** on the lens (rain, splashes, boats, hydrants and fountains).
 - **Matte characters**: less plastic-looking ped skin, clothes and hair.
 - All post effects are drawn **before the HUD**, so the HUD stays sharp.
+- **PC-style draw distance**: DE dropped the PC draw-distance factor from its LOD multiplier; it is put back (default 1.8, adjustable).
 - **Debug menu** (Dear ImGui): force or blend weather, set/freeze/speed up time, freecam, noclip. All keys are Ctrl+Shift chords, so it works on 60% keyboards.
 
 ## Requirements
@@ -47,6 +48,7 @@ In freecam and noclip: WASD moves, Space goes up, C goes down, the mouse looks a
   
   The panel also shows the current weather pair, the blend value, the forced weather and the region.
 - **Time.** Set hour and minute, jump to one of the 8 timecyc keyframes (00, 05, 06, 07, 12, 19, 20, 22), freeze the clock, or change clock speed (0.1× to 60×).
+- **Draw distance.** DE's `CCamera::Process` sets `TheCamera.m_fLODDistMultiplier` (`+0x104`) to `70 / FOV` only; the original multiplied that by `CRenderer::ms_lodDistScale`, the PC draw-distance slider (1.2 default, up to 1.8). So DE draws every model and LOD closer than PC even at default settings, which shows as pop-in when driving or flying. SkyGfxDE multiplies it by `[World] LodDistance` (default 1.8, the PC maximum) right after `CCamera::Process`, before the render list is built; cutscenes keep DE's fixed value. The multiplier feeds entity visibility (`0x141173E80`), sector and area streaming (`0x141174A50`, `0x141286CD0`) and the in-car ped range. DE also caps visibility at bound radius + 700 m, so values past ~2.5 change little. Not part of the look toggle.
 - **Freecam.** Takes over TheCamera's final matrix after `CCamera::Process`, so you can compare weather at any height. The world streams around the **player**, so use *Move player to camera* before flying far.
 - **Noclip.** Moves the player, or their vehicle, along the camera heading with collision off. Collision is restored when you turn it off. If you turn it off high up, you will fall.
 

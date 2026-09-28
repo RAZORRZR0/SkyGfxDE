@@ -125,6 +125,7 @@ void ReadIni() {
     c.grain               = GetPrivateProfileIntA("Grain", "Enabled", 1, ini) != 0;
     c.grainStrength       = Clamp(IniFloat("Grain", "Strength", 1.0f), 0.0f, 2.0f);
     c.waterDrops          = GetPrivateProfileIntA("WaterDrops", "Enabled", 1, ini) != 0;
+    c.lodDistance         = Clamp(IniFloat("World", "LodDistance", 1.8f), 0.5f, 4.0f);
     c.pedMatte            = Clamp(IniFloat("Characters", "Matte", 0.6f), 0.0f, 1.0f);
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 1.0f, 500.0f);
     c.freecamSensitivity  = Clamp(IniFloat("Tools", "FreecamSensitivity", 0.15f), 0.01f, 2.0f);
@@ -170,6 +171,7 @@ bool SaveIni() {
     WritePrivateProfileStringA("Grain", "Enabled", c.grain ? "1" : "0", g_iniPath);
     PutFloat("Grain", "Strength", c.grainStrength);
     WritePrivateProfileStringA("WaterDrops", "Enabled", c.waterDrops ? "1" : "0", g_iniPath);
+    PutFloat("World", "LodDistance", c.lodDistance);
     PutFloat("Characters", "Matte", c.pedMatte);
     PutFloat("Tools", "FreecamSpeed", c.freecamSpeed);
     PutFloat("Tools", "FreecamSensitivity", c.freecamSensitivity);

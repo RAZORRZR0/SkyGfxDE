@@ -1,3 +1,4 @@
+PASS LOD multiplier = DE's 70/FOV x LodDistance 1.8
 PASS rain cheat raises CWeather::Rain
 PASS tools and splash hooks ready
 PASS hydrant/fountain and particle hooks ready

@@ -367,10 +367,17 @@ static void* Hooked_AddParticle(void* sys, const float* p, void* v, float f, uin
     return o_AddParticle(sys, p, v, f, a, b, c, d, e, g);
 }
 
+// DE's CCamera::Process sets m_fLODDistMultiplier = 70 / FOV (the original: 70 / FOV * CRenderer::ms_lodDistScale, the
+// PC draw distance slider, 1.2 default, 0.925-1.8). It scales every model's draw distance for rendering and
+// streaming, so it's multiplied by [World] LodDistance here, before the frame's render list is built. Cutscenes keep
+// DE's fixed value, as in the original. DE caps visibility at bound radius + 700 m regardless.
+// ponytail: m_fGenerationDistMultiplier (+4, car/ped spawning) is left alone; scale it too if traffic pops in.
+static float* g_lodMult = nullptr; // TheCamera.m_fLODDistMultiplier
 static uintptr_t Hooked_CameraProcess(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d) {
     const uintptr_t r = o_CameraProcess(a, b, c, d);
     const float dt = FrameDt();
     __try {
+        if (g_lodMult && !(g_cutsceneRunning && *g_cutsceneRunning)) *g_lodMult *= g_cfg.lodDistance;
         AfterCamera(dt);
         SpeedFxRowUpdate();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -436,6 +443,11 @@ void ToolsPanel() {
         if (ImGui::SliderFloat("Time speed", &speed, 0.1f, 60.0f, "%.1fx", ImGuiSliderFlags_Logarithmic)) g_timeSpeed = speed;
         ImGui::SameLine();
         if (ImGui::SmallButton("1x")) g_timeSpeed = 1.0f;
+    }
+    if (ImGui::CollapsingHeader("Draw distance", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("LOD distance", &g_cfg.lodDistance, 0.5f, 4.0f, "x%.2f");
+        ImGui::TextDisabled(g_lodMult ? "multiplier now %.2f (DE: 70/FOV = 1.0; PC slider max 1.8)" : "not available on this build",
+                            g_lodMult ? *g_lodMult : 0.0f);
     }
     if (ImGui::CollapsingHeader("Camera / player", ImGuiTreeNodeFlags_DefaultOpen)) {
         bool fc = g_freecam, nc = g_noclip;
@@ -537,6 +549,15 @@ bool InstallTools() {
     g_FindPlayerEntity = (FindPlayerEntity_Fn)fpe;
     ok = MH_CreateHook(wu, (void*)&Hooked_WeatherUpdate, (void**)&o_WeatherUpdate) == MH_OK &&
          MH_CreateHook(cp, (void*)&Hooked_CameraProcess, (void**)&o_CameraProcess) == MH_OK;
+    // CCamera::Process: movss xmm0, 70.0; divss xmm0, FOV; movss [rbx+104h], xmm0; movss [rbx+108h], xmm0
+    // (rbx = TheCamera); the store's disp32 gives the field offset.
+    uint8_t* ld = FindUnique("F3 0F 10 05 ?? ?? ?? ?? F3 0F 5E 05 ?? ?? ?? ?? F3 0F 11 83 ?? ?? ?? ?? F3 0F 11 83");
+    if (ld && *(const float*)(ld + 8 + *(const int32_t*)(ld + 4)) == 70.0f) {
+        g_lodMult = (float*)((uint8_t*)g_camMatrix - 0x18 + *(const int32_t*)(ld + 20));
+        Resolved("CCamera LOD multiplier store", ld);
+        Resolved("TheCamera.m_fLODDistMultiplier", g_lodMult);
+    }
+    Log(1, "lod distance: %s", g_lodMult ? "ready" : "NOT found (DE's own LOD distance kept)");
     // Water splash FX for the lens drops: optional, rain drops work without them.
     uint8_t* sb = FindUnique("48 8B C4 57 48 83 EC 70 F3 0F 10 19 48 8B FA F3 0F 59 1D ?? ?? ?? ?? F3 0F 10 51 04 F3 0F 59 15");
     uint8_t* sp = FindUnique("4C 8B DC 49 89 4B 08 53 48 81 EC 80 00 00 00 48 8B 05 ?? ?? ?? ?? 49 89 7B 10 48 8B FA 45 0F 29 4B B8 44 0F 28 CA");

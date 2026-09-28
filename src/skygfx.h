@@ -46,6 +46,7 @@ struct Config {
     bool  grain = true;            // PS2 rain grain (CPostEffects::Render rain branch, skygfx Grain_PS2)
     float grainStrength = 1.0f;    // grain alpha multiplier (1 = PS2)
     bool  waterDrops = true;       // skygfx neo water drops on the lens (rain, water splashes)
+    float lodDistance = 1.8f;      // TheCamera.m_fLODDistMultiplier x this (PC draw distance slider: 1.2 default, 1.8 max)
     // characters: roughness towards 1, specular x(1 - matte) on DE's glossy ped materials
     float pedMatte = 0.6f;
     // timecyc

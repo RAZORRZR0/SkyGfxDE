@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from e2e_menu_click import GAME, focus, k32, module_base, pid_of, read  # noqa: E402
 
 RAIN_RVA = 0x531A1DC  # CWeather::Rain
+LOD_RVA = 0x53E14E4   # TheCamera.m_fLODDistMultiplier (DE alone: 70/FOV)
+FOV_RVA = 0x50311FC   # CDraw FOV, as divided in CCamera::Process
 OUT = os.path.join(os.path.dirname(__file__), "e2e_postfx.txt")
 u32 = ctypes.windll.user32
 
@@ -39,6 +41,10 @@ def main():
         focus(pid); time.sleep(2)
         ImageGrab.grab().save(os.path.join(tempfile.gettempdir(), "e2e_postfx_clear.png"))
         r0 = rain(h, base)
+        lod, fov = struct.unpack("<ff", (read(h, base + LOD_RVA, 4) or b"\0" * 4) + (read(h, base + FOV_RVA, 4) or b"\0" * 4))
+        ratio = lod / (70.0 / fov) if fov > 0 else 0.0
+        print(f"LOD multiplier {lod:.3f}, FOV {fov:.1f}, ratio to DE's 70/FOV {ratio:.3f}")
+        checks.append(("LOD multiplier = DE's 70/FOV x LodDistance 1.8", abs(ratio - 1.8) < 0.05))
         type_text("AUIFRVQS")
         time.sleep(30)
         r1 = rain(h, base)

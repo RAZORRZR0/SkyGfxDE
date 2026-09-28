@@ -63,6 +63,7 @@ static const struct { const char* name; uint32_t rva; } kExpected[] = {
     { "EntryExit state reset", 0x1085284 }, { "CEntryExitManager::ms_exitEnterState", 0x51B4A28 },
     { "hydrant/fountain audio event", 0x1005E30 }, { "FxSystem_c::AddParticle", 0xAEFA60 },
     { "Fx_c::prt_boatsplash", 0x5379778 }, { "Fx_c::prt_wake", 0x53797F8 }, { "Fx_c::prt_watersplash", 0x5379800 },
+    { "CCamera LOD multiplier store", 0x111CC5D }, { "TheCamera.m_fLODDistMultiplier", 0x53E14E4 },
 };
 
 int main(int argc, char** argv) {

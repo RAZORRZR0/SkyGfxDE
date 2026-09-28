@@ -43,6 +43,8 @@ CGame::currArea                  rva=0x572A450
 CCullZones flags (player)        rva=0x5313544
 CCullZones flags (camera)        rva=0x5313548
 CEntryExitManager::ms_exitEnterState rva=0x51B4A28
+CCamera LOD multiplier store     rva=0x111CC5D
+TheCamera.m_fLODDistMultiplier   rva=0x53E14E4
 water_splash_big FX              rva=0xAE7C60
 water_splash FX                  rva=0xAE7E60
 water_splsh_sml FX               rva=0xAE8020
@@ -89,6 +91,8 @@ ok   tool anchor FxSystem_c::AddParticle at 0xAEFA60
 ok   tool anchor Fx_c::prt_boatsplash at 0x5379778
 ok   tool anchor Fx_c::prt_wake at 0x53797F8
 ok   tool anchor Fx_c::prt_watersplash at 0x5379800
+ok   tool anchor CCamera LOD multiplier store at 0x111CC5D
+ok   tool anchor TheCamera.m_fLODDistMultiplier at 0x53E14E4
 ok   timecyc.dat loaded into the tables
 table checksum=0x63A2CAE7
 ok   midnight/weather 0 ambient matches the file
