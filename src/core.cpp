@@ -334,6 +334,7 @@ constexpr size_t LiveColors = 0x2B8;    // SkyColorSet (used by the renderer)
 constexpr size_t TargetColors = 0x458;  // written by CTimeCycle::Update, copied to LiveColors
 constexpr size_t OfSingleton = 0x688;   // AGTATimeOfDay* in DE's engine singleton
 constexpr size_t SkyLightIntensity = 0x66C; // float, sky light intensity (x SkylightColor alpha)
+constexpr size_t CloudyAmount = 0x26A4; // float, CWeather::CloudCoverage (CTimeCycle::Update copies it in)
 }
 namespace PP { // APostProcessVolume::Settings (FPostProcessSettings)
 constexpr size_t Settings = 0x260;
@@ -702,14 +703,13 @@ static uintptr_t FogUpdate(void* fogActor, float dt) {
     ClassicScope c;
     return o_FogUpdateColors(fogActor, dt);
 }
-// Weather particles (DE's port of SA's wind spray in storms and the sandstorm's sand; gta.ShowParticleFog), which
-// DE only spawns with Classic Atmosphere.
-typedef void (*WeatherParticles_Fn)();
-static WeatherParticles_Fn o_WeatherParticles = nullptr;
-static void Hooked_WeatherParticles() {
-    ClassicScope c;
-    o_WeatherParticles();
-}
+// Weather particles (DE's port of SA's wind spray in storms and the sandstorm's sand; gta.ShowParticleFog) and the
+// volumetric clouds met when flying above 220 m (DE's port of CClouds::VolumetricCloudsRender 0x716380;
+// gta.ShowVolumeClouds), which DE only runs with Classic Atmosphere.
+typedef void (*Void_Fn)();
+static Void_Fn o_WeatherParticles = nullptr, o_VolumeClouds = nullptr;
+static void Hooked_WeatherParticles() { ClassicScope c; o_WeatherParticles(); }
+static void Hooked_VolumeClouds() { ClassicScope c; o_VolumeClouds(); }
 
 static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
     // DE compares its new value with the component before writing; restore DE's values first so its
@@ -886,6 +886,11 @@ static void Hooked_TodColours(uint8_t* tod) {
         o_TodColours(tod);
         *g_classicFlag = 1;
         for (const auto& r : kClassicFields) memcpy(live + r.from, classic + r.from, r.to - r.from);
+        // No volumetric clouds here to cover the night sky (DE has no other weather fade for it), so do what the
+        // original's CClouds::Render (0x7139B2) did: moon and stars x (1 - max(Foggyness, CloudCoverage)). DE's
+        // CWeather::Update gives CloudCoverage 1 in the foggy weathers too, so CloudCoverage alone is that max.
+        const float clear = 1.0f - Clamp(*(float*)(tod + TOD::CloudyAmount), 0.0f, 1.0f);
+        for (float* c = (float*)(live + 0x138); c < (float*)(live + 0x158); ++c) *c *= clear; // MoonColor, StarsColor
     }
     __try {
         const bool classic = UserClassic(); // inside ClassicScope the timecyc still colours Classic's sky
@@ -1012,7 +1017,8 @@ struct Sig { const char* name; const char* pattern; uint8_t** out; };
 bool Install() {
     if (!InitTextSection()) return false;
     uint8_t *update = nullptr, *init = nullptr, *setClassic = nullptr, *ctor = nullptr, *colorOptions = nullptr, *gobjRef = nullptr,
-            *fogUpdate = nullptr, *markDirty = nullptr, *todColours = nullptr, *todTick = nullptr, *weatherParticles = nullptr;
+            *fogUpdate = nullptr, *markDirty = nullptr, *todColours = nullptr, *todTick = nullptr, *weatherParticles = nullptr,
+            *volumeClouds = nullptr;
     const Sig sigs[] = {
         { "CTimeCycle::Update", "4C 8B DC 55 56 49 8D 6B A1 48 81 EC C8 00 00 00 45 0F 29 4B A8 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 D7", &update },
         { "CTimeCycle::Initialise", "48 8B C4 88 48 08 55 53 56 57 41 54 41 56 41 57 48 8D 6C 24 80 48 81 EC B0 02 00 00 F3 0F 10 05 ?? ?? ?? ?? 48 8D 1D", &init },
@@ -1026,6 +1032,7 @@ bool Install() {
         { "AGTATimeOfDay colour update", "40 53 48 81 EC A0 00 00 00 0F 29 74 24 70 48 8B D9 48 8B 0D ?? ?? ?? ?? 44 0F 29 44 24 50 44 0F 29 4C 24 40 44 0F 29 54 24 30 48 8B 01 0F 29 7C 24 60 FF 90 78 03 00 00 0F B6 05", &todColours },
         { "AGTATimeOfDay::Tick", "4C 8B DC 49 89 5B 08 57 48 81 EC B0 00 00 00 48 8B 3D ?? ?? ?? ?? 48 8B D9 45 0F 29 43 C8 44 0F 28 C1 48 85 FF 0F 84", &todTick },
         { "weather particles (wind spray, sand)", "40 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 F6 05 ?? ?? ?? ?? 08 0F 85 ?? ?? ?? ?? F6 05 ?? ?? ?? ?? 08 0F 85", &weatherParticles },
+        { "volumetric clouds", "40 55 41 57 48 8D AC 24 18 FF FF FF 48 81 EC E8 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 20 80 3D ?? ?? ?? ?? 00 0F 84 ?? ?? ?? ?? 80 3D", &volumeClouds },
     };
     bool ok = true;
     for (const Sig& s : sigs) {
@@ -1066,8 +1073,25 @@ bool Install() {
          MH_CreateHook(fogUpdate, (void*)&Hooked_FogUpdateColors, (void**)&o_FogUpdateColors) == MH_OK &&
          MH_CreateHook(todColours, (void*)&Hooked_TodColours, (void**)&o_TodColours) == MH_OK &&
          MH_CreateHook(todTick, (void*)&Hooked_TodTick, (void**)&o_TodTick) == MH_OK &&
-         MH_CreateHook(weatherParticles, (void*)&Hooked_WeatherParticles, (void**)&o_WeatherParticles) == MH_OK;
+         MH_CreateHook(weatherParticles, (void*)&Hooked_WeatherParticles, (void**)&o_WeatherParticles) == MH_OK &&
+         MH_CreateHook(volumeClouds, (void*)&Hooked_VolumeClouds, (void**)&o_VolumeClouds) == MH_OK;
     if (!ok) { Log(1, "hook creation failed"); MH_Uninitialize(); return false; }
+    // DE's cloud port draws each quad at |dot| * alpha * 10/255; the original's is * 1/255 (0x7168F0), so DE's clouds
+    // are ~10x denser. The same function loads 1/255 at +0xA97: point the 10/255 load at +0xA42 to it.
+    static const uint8_t movssXmm1[] = { 0xF3, 0x0F, 0x10, 0x0D }, mulssXmm0[] = { 0xF3, 0x0F, 0x59, 0x05 };
+    const uint8_t* tenOver255 = RipAt(volumeClouds + 0xA42, movssXmm1, 4, 8);
+    const uint8_t* oneOver255 = RipAt(volumeClouds + 0xA97, mulssXmm0, 4, 8);
+    if (tenOver255 && oneOver255 && fabsf(*(const float*)tenOver255 - 10.0f / 255) < 1e-6f &&
+        fabsf(*(const float*)oneOver255 - 1.0f / 255) < 1e-7f) {
+        int32_t* disp = (int32_t*)(volumeClouds + 0xA42 + 4);
+        DWORD old;
+        VirtualProtect(disp, 4, PAGE_EXECUTE_READWRITE, &old);
+        *disp = (int32_t)(oneOver255 - (volumeClouds + 0xA42 + 8));
+        VirtualProtect(disp, 4, old, &old);
+        Log(2, "volumetric clouds: quad alpha / 255 (original)");
+    } else {
+        Log(1, "volumetric clouds: alpha constant not found, DE's 10/255 kept");
+    }
     if (!InstallTools()) Log(1, "debug tools unavailable (see above); the look still works");
     InstallPeds();
     InstallCoronas();
