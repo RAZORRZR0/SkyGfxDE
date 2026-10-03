@@ -28,7 +28,7 @@ struct Config {
     // timecyc colours
     float skyStrength = 1.0f, fogStrength = 1.0f, ambientStrength = 1.0f, sunTint = 0.35f, cloudTint = 0.5f;
     float brightness = 1.0f;   // sky/fog brightness from the timecyc and the original's day/night sun (0 = DE's)
-    float nightExposure = -1.8f; // EV added to DE's outdoor exposure at night (x the original's day/night balance)
+    float nightExposure = 0.0f; // EV added to DE's outdoor exposure at night (x the original's day/night balance)
     // atmosphere
     float haze = 0.35f;        // DE main height fog density / opacity multiplier (modern fog only)
     float groundHaze = 0.0f;   // DE's fixed second fog layer (0.02) multiplier (modern fog only)
@@ -58,7 +58,7 @@ struct Config {
     float lampDrawDistance = 150.0f;  // m: gta.streetlightdistance (DE: 4 cm, lamp lights culled); 0 = DE's
     float lampShadowDistance = 50.0f; // m: gta.streetlight.shadowdistance (DE: 4 cm, no shadows); 0 = DE's
     // timecyc
-    char  timecycFile[MAX_PATH] = "";
+    char  timecycFile[MAX_PATH] = "timecyc_ps2.dat";
     // tools
     float freecamSpeed = 20.0f;      // m/s
     float noclipSpeed = 15.0f;       // m/s

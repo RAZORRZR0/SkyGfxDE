@@ -110,7 +110,7 @@ void ReadIni() {
     c.sunTint             = Clamp(IniFloat("Colours", "Sun", 0.35f), 0.0f, 4.0f);
     c.cloudTint           = Clamp(IniFloat("Colours", "Clouds", 0.5f), 0.0f, 4.0f);
     c.brightness          = Clamp(IniFloat("Colours", "Brightness", 1.0f), 0.0f, 4.0f);
-    c.nightExposure       = Clamp(IniFloat("Colours", "NightExposure", -1.8f), -10.0f, 10.0f);
+    c.nightExposure       = Clamp(IniFloat("Colours", "NightExposure", 0.0f), -10.0f, 10.0f);
     c.haze                = Clamp(IniFloat("Atmosphere", "Haze", 0.35f), 0.0f, 20.0f);
     c.groundHaze          = Clamp(IniFloat("Atmosphere", "GroundHaze", 0.0f), 0.0f, 20.0f);
     c.classicSky          = GetPrivateProfileIntA("Atmosphere", "ClassicSky", 1, ini) != 0;
@@ -135,7 +135,7 @@ void ReadIni() {
     c.lampShadowDistance  = Clamp(IniFloat("StreetLights", "ShadowDistance", 50.0f), 0.0f, 1000.0f);
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 0.1f, 1000.0f);
     c.noclipSpeed         = Clamp(IniFloat("Tools", "NoclipSpeed", 15.0f), 0.1f, 1000.0f);
-    GetPrivateProfileStringA("Timecyc", "File", "", c.timecycFile, MAX_PATH, ini);
+    GetPrivateProfileStringA("Timecyc", "File", "timecyc_ps2.dat", c.timecycFile, MAX_PATH, ini);
 }
 
 static void PutFloat(const char* sec, const char* key, float v) {
@@ -702,6 +702,14 @@ static uintptr_t FogUpdate(void* fogActor, float dt) {
     ClassicScope c;
     return o_FogUpdateColors(fogActor, dt);
 }
+// Weather particles (DE's port of SA's wind spray in storms and the sandstorm's sand; gta.ShowParticleFog), which
+// DE only spawns with Classic Atmosphere.
+typedef void (*WeatherParticles_Fn)();
+static WeatherParticles_Fn o_WeatherParticles = nullptr;
+static void Hooked_WeatherParticles() {
+    ClassicScope c;
+    o_WeatherParticles();
+}
 
 static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
     // DE compares its new value with the component before writing; restore DE's values first so its
@@ -1004,7 +1012,7 @@ struct Sig { const char* name; const char* pattern; uint8_t** out; };
 bool Install() {
     if (!InitTextSection()) return false;
     uint8_t *update = nullptr, *init = nullptr, *setClassic = nullptr, *ctor = nullptr, *colorOptions = nullptr, *gobjRef = nullptr,
-            *fogUpdate = nullptr, *markDirty = nullptr, *todColours = nullptr, *todTick = nullptr;
+            *fogUpdate = nullptr, *markDirty = nullptr, *todColours = nullptr, *todTick = nullptr, *weatherParticles = nullptr;
     const Sig sigs[] = {
         { "CTimeCycle::Update", "4C 8B DC 55 56 49 8D 6B A1 48 81 EC C8 00 00 00 45 0F 29 4B A8 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 D7", &update },
         { "CTimeCycle::Initialise", "48 8B C4 88 48 08 55 53 56 57 41 54 41 56 41 57 48 8D 6C 24 80 48 81 EC B0 02 00 00 F3 0F 10 05 ?? ?? ?? ?? 48 8D 1D", &init },
@@ -1017,6 +1025,7 @@ bool Install() {
         // AGTATimeOfDay colour update: LiveColors = TargetColors, then DE's overrides; reads the clock via singleton+0x378
         { "AGTATimeOfDay colour update", "40 53 48 81 EC A0 00 00 00 0F 29 74 24 70 48 8B D9 48 8B 0D ?? ?? ?? ?? 44 0F 29 44 24 50 44 0F 29 4C 24 40 44 0F 29 54 24 30 48 8B 01 0F 29 7C 24 60 FF 90 78 03 00 00 0F B6 05", &todColours },
         { "AGTATimeOfDay::Tick", "4C 8B DC 49 89 5B 08 57 48 81 EC B0 00 00 00 48 8B 3D ?? ?? ?? ?? 48 8B D9 45 0F 29 43 C8 44 0F 28 C1 48 85 FF 0F 84", &todTick },
+        { "weather particles (wind spray, sand)", "40 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 F6 05 ?? ?? ?? ?? 08 0F 85 ?? ?? ?? ?? F6 05 ?? ?? ?? ?? 08 0F 85", &weatherParticles },
     };
     bool ok = true;
     for (const Sig& s : sigs) {
@@ -1056,7 +1065,8 @@ bool Install() {
          MH_CreateHook(colorOptions, (void*)&Hooked_UpdateColorOptions, (void**)&o_UpdateColorOptions) == MH_OK &&
          MH_CreateHook(fogUpdate, (void*)&Hooked_FogUpdateColors, (void**)&o_FogUpdateColors) == MH_OK &&
          MH_CreateHook(todColours, (void*)&Hooked_TodColours, (void**)&o_TodColours) == MH_OK &&
-         MH_CreateHook(todTick, (void*)&Hooked_TodTick, (void**)&o_TodTick) == MH_OK;
+         MH_CreateHook(todTick, (void*)&Hooked_TodTick, (void**)&o_TodTick) == MH_OK &&
+         MH_CreateHook(weatherParticles, (void*)&Hooked_WeatherParticles, (void**)&o_WeatherParticles) == MH_OK;
     if (!ok) { Log(1, "hook creation failed"); MH_Uninitialize(); return false; }
     if (!InstallTools()) Log(1, "debug tools unavailable (see above); the look still works");
     InstallPeds();

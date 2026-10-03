@@ -34,4 +34,5 @@ if errorlevel 1 (
 )
 copy /y SkyGfxDE.ini bin\SkyGfxDE.ini >nul
 copy /y data\SALodLights.dat bin\SALodLights.dat >nul
+copy /y data\timecyc_ps2.dat bin\timecyc_ps2.dat >nul
 echo Built bin\SkyGfxDE.asi
