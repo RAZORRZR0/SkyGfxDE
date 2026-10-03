@@ -24,19 +24,19 @@ static int16_t*  g_newWeather = nullptr;   // CWeather::NewWeatherType
 static int16_t*  g_forcedWeather = nullptr;// CWeather::ForcedWeatherType (-1 = none)
 static float*    g_interp = nullptr;       // CWeather::InterpolationValue
 static int16_t*  g_region = nullptr;       // CWeather::WeatherRegion
-static uint8_t*  g_hours = nullptr;        // CClock::ms_nGameClockHours
-static uint8_t*  g_minutes = nullptr;      // CClock::ms_nGameClockMinutes
+uint8_t*  g_hours = nullptr;               // CClock::ms_nGameClockHours
+uint8_t*  g_minutes = nullptr;             // CClock::ms_nGameClockMinutes
 static uint16_t* g_seconds = nullptr;      // CClock::ms_nGameClockSeconds
 static uint32_t* g_lastTick = nullptr;     // CClock::ms_nLastClockTick
 static uint32_t* g_msPerMinute = nullptr;  // CClock::ms_nMillisecondsPerGameMinute
-static uint32_t* g_timeMs = nullptr;       // CTimer::m_snTimeInMilliseconds
+uint32_t* g_timeMs = nullptr;              // CTimer::m_snTimeInMilliseconds
 static uint8_t** g_camMatrix = nullptr;    // TheCamera.m_matrix (CMatrix*)
 static uint8_t** g_players = nullptr;      // CWorld::Players[].m_pPed, stride 0x1C0
 static uint8_t*  g_playerInFocus = nullptr; // CWorld::PlayerInFocus
 volatile int g_speedFxRow = -1;           // row of kSpeedFx for this frame, -1 = off (read by the overlay)
 static float*    g_rain = nullptr;         // CWeather::Rain
 static float*    g_underWater = nullptr;   // CWeather::UnderWaterness
-static int32_t*  g_currArea = nullptr;     // CGame::currArea (0 = outside)
+int32_t*  g_currArea = nullptr;            // CGame::currArea (0 = outside)
 static uint32_t* g_zoneFlagsA = nullptr;   // CCullZones current flags (player / camera, as tested by CTimeCycle;
 static uint32_t* g_zoneFlagsB = nullptr;   //  both are only ever ORed): bit 3 = no rain
 FxState g_fx{};
@@ -70,12 +70,14 @@ static volatile bool g_releaseWeather = false;
 static volatile int  g_setHour = -1, g_setMinute = 0;
 static volatile bool g_freezeTime = false;
 static volatile float g_timeSpeed = 1.0f;
+static volatile bool g_timelapse = false;       // runs the clock at g_timelapseSpeed (freeze off) until unticked
+static float g_timelapseSpeed = 240.0f;         // 240x: a game day in 6 real seconds
 static uint32_t g_baseMsPerMinute = 0;
 
 // ---------------------------------------------------------------- freecam / noclip state (game thread)
 static volatile bool g_freecam = false, g_noclip = false;
-static volatile LONG g_mouseDx = 0, g_mouseDy = 0, g_wheel = 0;
-static float g_camPos[3], g_yaw = 0.0f, g_pitch = 0.0f, g_freecamMul = 1.0f;
+static volatile LONG g_wheel = 0;
+static float g_camPos[3], g_freecamMul = 1.0f;
 static bool g_freecamInit = false;
 static uint8_t* g_noclipEntity = nullptr;
 static bool g_noclipHadCollision = false;
@@ -86,7 +88,11 @@ static LARGE_INTEGER g_qpf, g_lastQpc;
 void ToolsToggleFreecam() { g_freecam = !g_freecam; g_freecamInit = false; Log(1, "freecam %s", g_freecam ? "on" : "off"); }
 void ToolsToggleNoclip() { g_noclip = !g_noclip; Log(1, "noclip %s", g_noclip ? "on" : "off"); }
 bool ToolsWantCapture() { return g_freecam || g_noclip; }
-void ToolsAddMouseDelta(long dx, long dy) { InterlockedAdd(&g_mouseDx, dx); InterlockedAdd(&g_mouseDy, dy); }
+bool WeatherBlend(int* oldW, int* newW, float* t) {
+    if (!g_oldWeather || !g_newWeather || !g_interp) return false;
+    *oldW = *g_oldWeather; *newW = *g_newWeather; *t = *g_interp;
+    return *oldW >= 0 && *oldW < kWeathers && *newW >= 0 && *newW < kWeathers;
+}
 void ToolsAddWheel(int notches) { InterlockedAdd(&g_wheel, notches); }
 
 static bool Key(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
@@ -126,10 +132,11 @@ static void BeforeWeather() {
     }
     if (!g_baseMsPerMinute && *g_msPerMinute) g_baseMsPerMinute = *g_msPerMinute;
     if (g_baseMsPerMinute) {
-        const float speed = g_timeSpeed < 0.05f ? 0.05f : g_timeSpeed;
+        const float want = g_timelapse ? g_timelapseSpeed : g_timeSpeed;
+        const float speed = want < 0.05f ? 0.05f : want;
         *g_msPerMinute = (uint32_t)(g_baseMsPerMinute / speed + 0.5f);
     }
-    if (g_freezeTime) { *g_lastTick = *g_timeMs; *g_seconds = 0; }
+    if (g_freezeTime && !g_timelapse) { *g_lastTick = *g_timeMs; *g_seconds = 0; }
 }
 
 static void AfterWeather() {
@@ -204,25 +211,23 @@ static void AfterCamera(float dt) {
 
     // freecam: overwrite TheCamera's final matrix
     if (!g_freecam || !cm) { g_freecamInit = false; if (cm) memcpy(g_lastCamPos, cm + 12, 12); return; }
+    // The mouse keeps reaching the game, so TheCamera's own matrix (computed from the mouse this frame, before this
+    // overwrite) gives the look direction; only the position is the freecam's.
+    float yaw, pitch;
+    CameraAngles(cm, yaw, pitch);
     if (!g_freecamInit) {
         memcpy(g_camPos, cm + 12, 12);
-        CameraAngles(cm, g_yaw, g_pitch);
-        InterlockedExchange(&g_mouseDx, 0); InterlockedExchange(&g_mouseDy, 0); InterlockedExchange(&g_wheel, 0);
+        InterlockedExchange(&g_wheel, 0);
         g_freecamInit = true;
     }
-    const float sens = g_cfg.freecamSensitivity * 3.14159265f / 180.0f;
-    g_yaw -= InterlockedExchange(&g_mouseDx, 0) * sens;
-    g_pitch -= InterlockedExchange(&g_mouseDy, 0) * sens;
-    if (g_pitch > 1.55f) g_pitch = 1.55f;
-    if (g_pitch < -1.55f) g_pitch = -1.55f;
     const LONG wheel = InterlockedExchange(&g_wheel, 0);
     if (wheel) g_freecamMul = fminf(20.0f, fmaxf(0.05f, g_freecamMul * powf(1.25f, (float)wheel)));
     float v[3];
-    if (MoveInput(g_yaw, g_pitch, true, v)) {
+    if (MoveInput(yaw, pitch, true, v)) {
         const float s = g_cfg.freecamSpeed * g_freecamMul * SpeedMul() * dt;
         for (int i = 0; i < 3; ++i) g_camPos[i] += v[i] * s;
     }
-    const float cy = cosf(g_yaw), sy = sinf(g_yaw), cp = cosf(g_pitch), sp = sinf(g_pitch);
+    const float cy = cosf(yaw), sy = sinf(yaw), cp = cosf(pitch), sp = sinf(pitch);
     const float fwd[3] = { cp * cy, cp * sy, sp };
     const float up[3] = { -sp * cy, -sp * sy, cp };
     const float right[3] = { up[1] * fwd[2] - up[2] * fwd[1], up[2] * fwd[0] - up[0] * fwd[2], up[0] * fwd[1] - up[1] * fwd[0] };
@@ -243,7 +248,9 @@ static void AfterCamera(float dt) {
 }
 
 // SpeedFX, CPostEffects::Render (gta-reversed PostEffects.cpp) with DE offsets:
-// - player vehicle, not heli/plane/boat/train (type +0x890: 3/4/5/6);
+// - player vehicle, not heli/plane/boat/train: IsSubHeli/IsSubPlane/... test m_nVehicleSubType (+0x894: 3/4/5/6).
+//   +0x890 is the base type (m_nVehicleType), which is 0 (automobile) for planes and helis too: DE compares it only
+//   with 0/5/6/9, the subtype with 0..10;
 // - NOS: automobile (type 0) with handlingFlags.bNosInst (+0x5C0 & 0x80000) and m_fTireTemperature (+0xC0C) < 0
 //   (nitro burning, CAutomobile::NitrousControl 0x14138F290): dir = moveSpeed . forward, if > 0.2 the input is
 //   clamp(2 * dir * (m_GasPedal (+0x710) + 1), 0, 1), drawn even in cutscenes as in the original;
@@ -261,7 +268,7 @@ static void SpeedFxRowUpdate() {
     int row = -1;
     const uint8_t* ped = g_players[0x1C0 / 8 * *g_playerInFocus];
     const uint8_t* veh = ped && (*(const uint32_t*)(ped + 0x634) & 0x100) ? *(uint8_t* const*)(ped + 0x7C8) : nullptr;
-    const uint32_t type = veh ? *(const uint32_t*)(veh + 0x890) : 0;
+    const uint32_t type = veh ? *(const uint32_t*)(veh + 0x894) : 0; // m_nVehicleSubType
     const bool cutscene = g_cutsceneRunning && *g_cutsceneRunning;
     if (g_cfg.speedFxTestMode && g_cfg.speedFx && g_active) {
         row = SpeedFxInputRow(1.0f); // m_bSpeedFXTestMode: SetSpeedFXManualSpeedCurrentFrame(1.0f), no vehicle needed
@@ -418,14 +425,14 @@ void ToolsPanel() {
         if (g_weatherMode == WM_BLEND) {
             WeatherCombo("B", g_weatherB);
             float b = g_blend;
-            if (ImGui::SliderFloat("Blend", &b, 0.0f, 1.0f)) g_blend = b;
+            if (SliderBox("Blend", &b, 0.0f, 1.0f, 0.0f, 1.0f)) g_blend = b;
         }
         ImGui::TextDisabled("Force holds the weather; Game releases it back to the region cycle.");
     }
     if (ImGui::CollapsingHeader("Time", ImGuiTreeNodeFlags_DefaultOpen)) {
         static int h = 12, m = 0;
-        ImGui::SliderInt("Hour", &h, 0, 23);
-        ImGui::SliderInt("Minute", &m, 0, 59);
+        SliderBoxInt("Hour", &h, 0, 23, 0, 23);
+        SliderBoxInt("Minute", &m, 0, 59, 0, 59);
         if (ImGui::Button("Set time")) { g_setMinute = m; g_setHour = h; }
         ImGui::SameLine();
         if (ImGui::Button("Now")) { h = *g_hours; m = *g_minutes; }
@@ -440,12 +447,17 @@ void ToolsPanel() {
         bool freeze = g_freezeTime;
         if (ImGui::Checkbox("Freeze time", &freeze)) g_freezeTime = freeze;
         float speed = g_timeSpeed;
-        if (ImGui::SliderFloat("Time speed", &speed, 0.1f, 60.0f, "%.1fx", ImGuiSliderFlags_Logarithmic)) g_timeSpeed = speed;
+        if (SliderBox("Time speed", &speed, 0.1f, 60.0f, 0.05f, 1000.0f, "%.1fx", ImGuiSliderFlags_Logarithmic)) g_timeSpeed = speed;
         ImGui::SameLine();
         if (ImGui::SmallButton("1x")) g_timeSpeed = 1.0f;
+        bool lapse = g_timelapse;
+        if (ImGui::Checkbox("Timelapse", &lapse)) g_timelapse = lapse;
+        ImGui::SameLine();
+        ImGui::TextDisabled("(a game day in %.0f s)", 1440.0f * (g_baseMsPerMinute ? g_baseMsPerMinute : 1000) / 1000.0f / g_timelapseSpeed);
+        SliderBox("Timelapse speed", &g_timelapseSpeed, 30.0f, 1000.0f, 1.0f, 1000.0f, "%.0fx", ImGuiSliderFlags_Logarithmic);
     }
     if (ImGui::CollapsingHeader("Draw distance", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("LOD distance", &g_cfg.lodDistance, 0.5f, 4.0f, "x%.2f");
+        SliderBox("LOD distance", &g_cfg.lodDistance, 0.5f, 4.0f, 0.1f, 10.0f, "x%.2f");
         ImGui::TextDisabled(g_lodMult ? "multiplier now %.2f (DE: 70/FOV = 1.0; PC slider max 1.8)" : "not available on this build",
                             g_lodMult ? *g_lodMult : 0.0f);
     }
@@ -456,9 +468,8 @@ void ToolsPanel() {
         ImGui::SameLine(0, 30);
         if (ImGui::Checkbox("Noclip", &nc)) { if (nc != g_noclip) ToolsToggleNoclip(); }
         ImGui::SameLine(); ImGui::TextDisabled("(%s)", g_cfg.keyNoclip.text);
-        ImGui::SliderFloat("Freecam speed (m/s)", &g_cfg.freecamSpeed, 1.0f, 200.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
-        ImGui::SliderFloat("Mouse sensitivity", &g_cfg.freecamSensitivity, 0.01f, 1.0f);
-        ImGui::SliderFloat("Noclip speed (m/s)", &g_cfg.noclipSpeed, 1.0f, 200.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+        SliderBox("Freecam speed (m/s)", &g_cfg.freecamSpeed, 1.0f, 200.0f, 0.1f, 1000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+        SliderBox("Noclip speed (m/s)", &g_cfg.noclipSpeed, 1.0f, 200.0f, 0.1f, 1000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
         ImGui::Text("camera %.1f %.1f %.1f (height %.0f m)", g_lastCamPos[0], g_lastCamPos[1], g_lastCamPos[2], g_lastCamPos[2]);
         ImGui::Text("player %.1f %.1f %.1f", g_lastPlayerPos[0], g_lastPlayerPos[1], g_lastPlayerPos[2]);
         ImGui::BeginDisabled(!g_freecam);

@@ -5,6 +5,7 @@
 #include "skygfx.h"
 #include <d3d11.h>
 #include <dxgi.h>
+#include <math.h>
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_impl_dx11.h"
 #include "../imgui/imgui_impl_win32.h"
@@ -73,18 +74,9 @@ static LRESULT CALLBACK Hooked_WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     const bool menu = g_menuOpen;
     const bool tool = ToolsWantCapture();
     const bool capture = menu || tool;
-    if (msg == WM_INPUT && capture) {
-        if (!menu && tool) {
-            RAWINPUT ri;
-            UINT size = sizeof(ri);
-            if (GetRawInputData((HRAWINPUT)lp, RID_INPUT, &ri, &size, sizeof(RAWINPUTHEADER)) != (UINT)-1 &&
-                ri.header.dwType == RIM_TYPEMOUSE && !(ri.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
-                ToolsAddMouseDelta(ri.data.mouse.lLastX, ri.data.mouse.lLastY);
-                if (ri.data.mouse.usButtonFlags & RI_MOUSE_WHEEL) ToolsAddWheel((short)ri.data.mouse.usButtonData / WHEEL_DELTA);
-            }
-        }
-        return DefWindowProcW(hwnd, msg, wp, lp); // keeps raw input from the game, cleans up the buffer
-    }
+    // Freecam/noclip keep the keyboard (WASD flies) and mouse buttons/wheel away from the game, but not mouse
+    // movement: the game's camera still follows the mouse and gives the look direction.
+    if (msg == WM_INPUT && menu) return DefWindowProcW(hwnd, msg, wp, lp); // keeps raw input from the game, cleans up the buffer
     if (menu && g_ready) {
         // ImGui's handler re-enters this procedure synchronously (ReleaseCapture sends WM_CAPTURECHANGED) and
         // SRW locks are not recursive: nested calls on this thread reuse the lock it already holds.
@@ -120,8 +112,11 @@ static LRESULT CALLBACK Hooked_WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             swallowedDown |= button(msg, wp);
             return 0;
         case WM_KEYDOWN: case WM_CHAR: case WM_SYSCHAR: case WM_DEADCHAR:
-        case WM_MOUSEMOVE: case WM_MOUSEHWHEEL:
+        case WM_MOUSEHWHEEL:
             return 0;
+        case WM_MOUSEMOVE:
+            if (menu) return 0;
+            break;
         case WM_MOUSEWHEEL:
             if (!menu) ToolsAddWheel(GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA);
             return 0;
@@ -344,7 +339,9 @@ static HRESULT STDMETHODCALLTYPE Hooked_Present(IDXGISwapChain* sc, UINT sync, U
 
 static HRESULT STDMETHODCALLTYPE Hooked_ResizeBuffers(IDXGISwapChain* sc, UINT n, UINT w, UINT h, DXGI_FORMAT fmt, UINT fl) {
     const bool ours = g_ready && sc == g_swapChain;
-    if (ours) { ReleaseRtv(); PostFxReleaseSized(); ImGui_ImplDX11_InvalidateDeviceObjects(); }
+    if (ours) {
+        ReleaseRtv(); PostFxReleaseSized(); ImGui_ImplDX11_InvalidateDeviceObjects();
+    }
     const HRESULT hr = o_ResizeBuffers(sc, n, w, h, fmt, fl);
     if (ours) { CreateRtv(); ImGui_ImplDX11_CreateDeviceObjects(); }
     return hr;

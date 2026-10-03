@@ -11,8 +11,11 @@ ok   GObjects = 0x145086380
 ok   timecyc table RVAs all read by CColourSet::CColourSet
 FNamePool rva=0x570CDC0
 ok   FNamePool = stru_14570CDC0 (lea rdx in the name-entry accessor)
-ShowVolumeFogInClassic rva=0x5724FDC
-ok   gta.ShowVolumeFogInClassic = byte_145724FDC (AGTAHeightFog::UpdateColors+0x84)
+ok   r.VolumetricCloud data = qword_1456D90A8 (its TAutoConsoleVariable registration)
+ok   gta.streetlightdistance = dword_1450242A8 (its RegisterConsoleVariableRef)
+ok   gta.streetlight.shadowdistance = dword_145725260
+ok   sky curve evaluator = sub_140BAE000 (CColourSet::CColourSet+0x41D)
+ok   weather -> sky curve set = dword_144222DC0 (CColourSet::CColourSet+0x3EF)
 CWeather::Update                 rva=0x12903B0
 CClock::SetGameClock             rva=0x112B980
 CWeather::FindWeatherTypesList   rva=0x1291330
@@ -94,7 +97,7 @@ ok   tool anchor Fx_c::prt_watersplash at 0x5379800
 ok   tool anchor CCamera LOD multiplier store at 0x111CC5D
 ok   tool anchor TheCamera.m_fLODDistMultiplier at 0x53E14E4
 ok   timecyc.dat loaded into the tables
-table checksum=0x63A2CAE7
+table checksum=0xBF662932
 ok   midnight/weather 0 ambient matches the file
 ok   sky top/bottom red match the file
 ALL PASSED

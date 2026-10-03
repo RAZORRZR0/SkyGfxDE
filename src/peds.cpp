@@ -13,7 +13,6 @@
 
 uint8_t* g_namePool = nullptr; // FNamePool: Blocks[] at +0x10, CurrentBlock +8, CurrentByteCursor +0xC
 
-namespace UO { constexpr size_t Class = 0x10, Name = 0x18, Outer = 0x20, Index = 0x0C; constexpr int ProcessEventSlot = 0x43; }
 namespace MI { constexpr size_t Parent = 0xD0, Scalars = 0xE0, ScalarStride = 0x24, ScalarValue = 0x10; } // UMaterialInstance
 constexpr uint8_t GlobalParameter = 2; // EMaterialParameterAssociation
 
@@ -47,7 +46,7 @@ static const uint8_t* NameEntry(int32_t idx) {
     return b ? b + 2 * (idx & 0xFFFF) : nullptr;
 }
 
-static bool NameIs(int32_t idx, const char* s) {
+bool NameIs(int32_t idx, const char* s) {
     const uint8_t* e = NameEntry(idx);
     if (!e) return false;
     const uint16_t h = *(const uint16_t*)e; // bIsWide:1, probe hash:5, Len:10
@@ -56,7 +55,7 @@ static bool NameIs(int32_t idx, const char* s) {
 }
 
 // Comparison index of an ANSI name already in the pool, or -1.
-static int32_t FindName(const char* s) {
+int32_t FindName(const char* s) {
     const size_t n = strlen(s);
     const uint32_t cur = *(uint32_t*)(g_namePool + 8), cursor = *(uint32_t*)(g_namePool + 0xC);
     for (uint32_t b = 0; b <= cur; ++b) {
@@ -73,8 +72,8 @@ static int32_t FindName(const char* s) {
     return -1;
 }
 
-static int32_t NameOf(const uint8_t* obj) { return obj ? *(const int32_t*)(obj + UO::Name) : -1; }
-static int32_t ClassOf(const uint8_t* obj) { return NameOf(*(uint8_t* const*)(obj + UO::Class)); }
+int32_t NameOf(const uint8_t* obj) { return obj ? *(const int32_t*)(obj + UO::Name) : -1; }
+int32_t ClassOf(const uint8_t* obj) { return NameOf(*(uint8_t* const*)(obj + UO::Class)); }
 
 // ---------------------------------------------------------------- material instances
 static bool IsInstance(const uint8_t* obj) { const int32_t c = ClassOf(obj); return c == g_clsMIC || c == g_clsMID; }
@@ -143,7 +142,7 @@ static void Apply(Tracked& t, float matte) {
 }
 
 // ---------------------------------------------------------------- per frame
-static bool OnGameThread() {
+bool OnGameThread() {
     static DWORD tid = 0;
     if (!tid) {
         DWORD pid = 0;
@@ -151,7 +150,7 @@ static bool OnGameThread() {
         const DWORD t = w ? GetWindowThreadProcessId(w, &pid) : 0;
         if (pid != GetCurrentProcessId()) return false;
         tid = t;
-        Log(1, "characters: game thread %lu, look hook thread %lu", tid, GetCurrentThreadId());
+        Log(1, "game thread %lu, look hook thread %lu", tid, GetCurrentThreadId());
     }
     return GetCurrentThreadId() == tid;
 }
@@ -171,7 +170,7 @@ static bool ResolveNames() {
 }
 
 // Tracked instance still in its GObjects slot and not PendingKill/Unreachable.
-static bool LiveAt(int32_t i, const uint8_t* obj) {
+bool LiveAt(int32_t i, const uint8_t* obj) {
     uint8_t* item = ObjectItem(i);
     return item && *(uint8_t**)item == obj && !(*(int32_t*)(item + 8) & ((1 << 29) | (1 << 28)));
 }
@@ -251,7 +250,7 @@ bool InstallPeds() {
 
 void PedsPanel() {
     if (!g_pedsOk) { ImGui::TextDisabled("unavailable on this build"); return; }
-    ImGui::SliderFloat("Matte", &g_cfg.pedMatte, 0.0f, 1.0f);
+    SliderBox("Matte", &g_cfg.pedMatte, 0.0f, 1.0f, 0.0f, 1.0f);
     ImGui::TextDisabled("roughness -> 1 and specular x(1 - matte) on skin, clothes and hair");
     ImGui::Text("%d character material instances", g_trackedCount);
 }

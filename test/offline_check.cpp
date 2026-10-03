@@ -39,7 +39,7 @@ static uint8_t* MapImage(const char* path) {
 
 static uint32_t TableChecksum(const uint8_t* img) {
     uint32_t h = 2166136261u;
-    for (const TcCol& c : kTimecycCols) {
+    for (const TcCol& c : g_timecycCols) {
         if (c.kind == K_SKIP) continue;
         const size_t n = kHours * kWeathers * (c.kind == K_I16 ? 2 : 1);
         for (size_t i = 0; i < n; ++i) h = (h ^ img[c.rva + i]) * 16777619u;
@@ -87,8 +87,15 @@ int main(int argc, char** argv) {
     Check(g_timecycTableOk, "timecyc table RVAs all read by CColourSet::CColourSet");
     fprintf(g_out, "FNamePool rva=0x%llX\n", (unsigned long long)(g_namePool - img));
     Check(g_namePool == img + 0x570CDC0, "FNamePool = stru_14570CDC0 (lea rdx in the name-entry accessor)");
-    fprintf(g_out, "ShowVolumeFogInClassic rva=0x%llX\n", (unsigned long long)(g_volFogInClassic - img));
-    Check(g_volFogInClassic == img + 0x5724FDC, "gta.ShowVolumeFogInClassic = byte_145724FDC (AGTAHeightFog::UpdateColors+0x84)");
+    extern int32_t** g_cloudCVar;
+    Check((const uint8_t*)g_cloudCVar == img + 0x56D90A8, "r.VolumetricCloud data = qword_1456D90A8 (its TAutoConsoleVariable registration)");
+    extern int32_t *g_drawVar, *g_shadowVar;
+    Check((const uint8_t*)g_drawVar == img + 0x50242A8, "gta.streetlightdistance = dword_1450242A8 (its RegisterConsoleVariableRef)");
+    Check((const uint8_t*)g_shadowVar == img + 0x5725260, "gta.streetlight.shadowdistance = dword_145725260");
+    extern void (*g_SkyEval)(void*, float, float, void*);
+    extern const int32_t* g_skyRemap;
+    Check((const uint8_t*)g_SkyEval == img + 0xBAE000, "sky curve evaluator = sub_140BAE000 (CColourSet::CColourSet+0x41D)");
+    Check((const uint8_t*)g_skyRemap == img + 0x4222DC0, "weather -> sky curve set = dword_144222DC0 (CColourSet::CColourSet+0x3EF)");
 
     // Tool addresses: every one resolved and equal to the IDA value.
     char buf[8192] = {};

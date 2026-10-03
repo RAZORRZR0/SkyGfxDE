@@ -1,0 +1,8 @@
+PASS 22:00 sky with Brightness 1 is much darker than with 0
+PASS 22:00 street with Brightness 1 is darker (NightExposure)
+PASS 22:00 sky with Brightness 1 is purple (blue > green), not DE's orange sunset
+PASS 22:00 live SkyLower is the timecyc's dark purple
+PASS 12:00 sky brightness stays within 25% of DE's
+PASS 22:00 sun is off with Brightness 1 (original night from 21:00)
+PASS 12:00 sun stays on with Brightness 1
+PASS 00:00 SUNNY_SF sky is dark (not bright cyan)
