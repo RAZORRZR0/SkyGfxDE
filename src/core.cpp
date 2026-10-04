@@ -110,7 +110,7 @@ void ReadIni() {
     c.sunTint             = Clamp(IniFloat("Colours", "Sun", 0.35f), 0.0f, 4.0f);
     c.cloudTint           = Clamp(IniFloat("Colours", "Clouds", 0.5f), 0.0f, 4.0f);
     c.brightness          = Clamp(IniFloat("Colours", "Brightness", 1.0f), 0.0f, 4.0f);
-    c.nightExposure       = Clamp(IniFloat("Colours", "NightExposure", 0.0f), -10.0f, 10.0f);
+    c.nightExposure       = Clamp(IniFloat("Colours", "NightExposure", -0.5f), -10.0f, 10.0f);
     c.haze                = Clamp(IniFloat("Atmosphere", "Haze", 0.35f), 0.0f, 20.0f);
     c.groundHaze          = Clamp(IniFloat("Atmosphere", "GroundHaze", 0.0f), 0.0f, 20.0f);
     c.classicSky          = GetPrivateProfileIntA("Atmosphere", "ClassicSky", 1, ini) != 0;
@@ -133,6 +133,8 @@ void ReadIni() {
     c.coronaFarClip       = Clamp(IniFloat("Coronas", "FarClip", 0.0f), 0.0f, 20000.0f);
     c.lampDrawDistance    = Clamp(IniFloat("StreetLights", "DrawDistance", 150.0f), 0.0f, 5000.0f);
     c.lampShadowDistance  = Clamp(IniFloat("StreetLights", "ShadowDistance", 50.0f), 0.0f, 1000.0f);
+    c.otherLightShadows   = GetPrivateProfileIntA("StreetLights", "OtherLightShadows", 1, ini) != 0;
+    c.bollardBrightness   = Clamp(IniFloat("StreetLights", "BollardBrightness", 0.5f), 0.0f, 4.0f);
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 0.1f, 1000.0f);
     c.noclipSpeed         = Clamp(IniFloat("Tools", "NoclipSpeed", 15.0f), 0.1f, 1000.0f);
     GetPrivateProfileStringA("Timecyc", "File", "timecyc_ps2.dat", c.timecycFile, MAX_PATH, ini);
@@ -184,6 +186,8 @@ bool SaveIni() {
     PutFloat("Coronas", "FarClip", c.coronaFarClip);
     PutFloat("StreetLights", "DrawDistance", c.lampDrawDistance);
     PutFloat("StreetLights", "ShadowDistance", c.lampShadowDistance);
+    WritePrivateProfileStringA("StreetLights", "OtherLightShadows", c.otherLightShadows ? "1" : "0", g_iniPath);
+    PutFloat("StreetLights", "BollardBrightness", c.bollardBrightness);
     PutFloat("Tools", "FreecamSpeed", c.freecamSpeed);
     PutFloat("Tools", "NoclipSpeed", c.noclipSpeed);
     const bool ok = WritePrivateProfileStringA("Timecyc", "File", c.timecycFile, g_iniPath) != 0;
@@ -693,11 +697,15 @@ struct ClassicScope {
 // The user's Classic Atmosphere setting (the look steps aside), not our scoped flag.
 static bool UserClassic() { return g_classicFlag && *g_classicFlag && !g_classicScoped; }
 
+static void GuardedFrame(void (*fn)(), const char* what);
 typedef uintptr_t (*TodTick_Fn)(void* tod, float dt, uintptr_t, uintptr_t);
 static TodTick_Fn o_TodTick = nullptr;
 static uintptr_t Hooked_TodTick(void* tod, float dt, uintptr_t a3, uintptr_t a4) {
-    ClassicScope c;
-    return o_TodTick(tod, dt, a3, a4);
+    uintptr_t r;
+    { ClassicScope c; r = o_TodTick(tod, dt, a3, a4); }
+    // An actor tick, so UE's game thread (CTimeCycle::Update is not): UObject calls (ProcessEvent) are safe here.
+    GuardedFrame(OtherLightShadowsFrame, "other light shadows");
+    return r;
 }
 static uintptr_t FogUpdate(void* fogActor, float dt) {
     ClassicScope c;
@@ -710,6 +718,14 @@ typedef void (*Void_Fn)();
 static Void_Fn o_WeatherParticles = nullptr, o_VolumeClouds = nullptr;
 static void Hooked_WeatherParticles() { ClassicScope c; o_WeatherParticles(); }
 static void Hooked_VolumeClouds() { ClassicScope c; o_VolumeClouds(); }
+// SF's moving fog (CClouds::MovingFogRender's port: gta.ShowMovingFog, FOGGY_SF) and the rainbow after rain
+// (CClouds::Render_MaybeRenderRainbows' port, DE's rainbow mesh; gta.ShowOldRainbow for the sprites) also only run
+// with the Classic flag.
+typedef void (*Rainbow_Fn)(uintptr_t, uintptr_t, uintptr_t);
+static Void_Fn o_MovingFog = nullptr;
+static Rainbow_Fn o_Rainbow = nullptr;
+static void Hooked_MovingFog() { ClassicScope c; o_MovingFog(); }
+static void Hooked_Rainbow(uintptr_t a, uintptr_t b, uintptr_t c) { ClassicScope s; o_Rainbow(a, b, c); }
 
 static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
     // DE compares its new value with the component before writing; restore DE's values first so its
@@ -1092,6 +1108,13 @@ bool Install() {
     } else {
         Log(1, "volumetric clouds: alpha constant not found, DE's 10/255 kept");
     }
+    // Moving fog and rainbow: optional (a missing one only loses that effect).
+    uint8_t* movingFog = FindUnique("4C 8B DC 55 49 8D 6B 98 48 81 EC 60 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 F0 48 83 3D ?? ?? ?? ?? 00 0F 84 ?? ?? ?? ?? 80 3D");
+    uint8_t* rainbow = FindUnique("40 55 48 8D 6C 24 A9 48 81 EC E0 00 00 00 80 3D ?? ?? ?? ?? 00 0F 84 ?? ?? ?? ?? 83 3D ?? ?? ?? ?? 00 0F 85 ?? ?? ?? ?? 80 3D");
+    if (movingFog) MH_CreateHook(movingFog, (void*)&Hooked_MovingFog, (void**)&o_MovingFog);
+    if (rainbow) MH_CreateHook(rainbow, (void*)&Hooked_Rainbow, (void**)&o_Rainbow);
+    Log(movingFog ? 2 : 1, "moving fog %p%s", movingFog, movingFog ? "" : ": not found, no SF moving fog");
+    Log(rainbow ? 2 : 1, "rainbow %p%s", rainbow, rainbow ? "" : ": not found, no rainbow");
     if (!InstallTools()) Log(1, "debug tools unavailable (see above); the look still works");
     InstallPeds();
     InstallCoronas();

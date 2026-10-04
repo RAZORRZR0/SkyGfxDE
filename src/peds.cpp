@@ -142,15 +142,22 @@ static void Apply(Tracked& t, float matte) {
 }
 
 // ---------------------------------------------------------------- per frame
+// UE's game thread owns the game window. FindWindow("UnrealWindow") missed DE's window, so take this process's
+// visible top-level window instead.
 bool OnGameThread() {
     static DWORD tid = 0;
     if (!tid) {
-        DWORD pid = 0;
-        const HWND w = FindWindowA("UnrealWindow", nullptr);
-        const DWORD t = w ? GetWindowThreadProcessId(w, &pid) : 0;
-        if (pid != GetCurrentProcessId()) return false;
-        tid = t;
-        Log(1, "game thread %lu, look hook thread %lu", tid, GetCurrentThreadId());
+        HWND w = nullptr;
+        EnumWindows([](HWND h, LPARAM p) -> BOOL {
+            DWORD pid = 0;
+            GetWindowThreadProcessId(h, &pid);
+            if (pid != GetCurrentProcessId() || !IsWindowVisible(h) || GetWindow(h, GW_OWNER)) return TRUE;
+            *(HWND*)p = h;
+            return FALSE;
+        }, (LPARAM)&w);
+        if (!w) return false;
+        tid = GetWindowThreadProcessId(w, nullptr);
+        Log(1, "game thread %lu, this thread %lu", tid, GetCurrentThreadId());
     }
     return GetCurrentThreadId() == tid;
 }

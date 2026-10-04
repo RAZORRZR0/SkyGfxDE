@@ -28,7 +28,7 @@ struct Config {
     // timecyc colours
     float skyStrength = 1.0f, fogStrength = 1.0f, ambientStrength = 1.0f, sunTint = 0.35f, cloudTint = 0.5f;
     float brightness = 1.0f;   // sky/fog brightness from the timecyc and the original's day/night sun (0 = DE's)
-    float nightExposure = 0.0f; // EV added to DE's outdoor exposure at night (x the original's day/night balance)
+    float nightExposure = -0.5f; // EV added to DE's outdoor exposure at night (x the original's day/night balance)
     // atmosphere
     float haze = 0.35f;        // DE main height fog density / opacity multiplier (modern fog only)
     float groundHaze = 0.0f;   // DE's fixed second fog layer (0.02) multiplier (modern fog only)
@@ -57,6 +57,8 @@ struct Config {
     // street lights (streetlights.cpp): DE's lamp light components
     float lampDrawDistance = 150.0f;  // m: gta.streetlightdistance (DE: 4 cm, lamp lights culled); 0 = DE's
     float lampShadowDistance = 50.0f; // m: gta.streetlight.shadowdistance (DE: 4 cm, no shadows); 0 = DE's
+    bool  otherLightShadows = true;   // park bollards cast shadows (DE: bNeverCastShadows)
+    float bollardBrightness = 0.5f;   // park bollard light intensity multiplier (1 = DE's)
     // timecyc
     char  timecycFile[MAX_PATH] = "timecyc_ps2.dat";
     // tools
@@ -127,6 +129,7 @@ void ApplyTimecycFile();
 void CoronasFrame();               // game thread, from the look hook
 void CoronasPanel();               // render thread, Look tab
 void StreetLightsFrame();          // game thread, from the look hook
+void OtherLightShadowsFrame();     // game thread, from the look hook
 void StreetLightsPanel();          // render thread, Look tab
 // UObject / FName helpers (peds.cpp), game thread
 namespace UO { constexpr size_t Flags = 0x08, Class = 0x10, Name = 0x18, Outer = 0x20, Index = 0x0C; constexpr int ProcessEventSlot = 0x43; }
