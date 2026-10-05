@@ -1,0 +1,1 @@
+dx12_off: frames 4074, avg 136.0 fps, median 6.89 ms, p99 11.37 ms, max 20.1 ms, hitches (>2.5x median) 3

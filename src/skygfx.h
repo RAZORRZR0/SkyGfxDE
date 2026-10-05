@@ -33,6 +33,9 @@ struct Config {
     float haze = 0.35f;        // DE main height fog density / opacity multiplier (modern fog only)
     float groundHaze = 0.0f;   // DE's fixed second fog layer (0.02) multiplier (modern fog only)
     bool  classicSky = true;   // Classic Atmosphere's sky, clouds, sun and fog; the modern lighting kept
+    bool  gtaFog = false;      // ClassicSky=0 only: fog from the timecyc far clip (DE's GTA fog path), modern sky kept
+    float fogDistance = 1.8f;  // GTA fog: timecyc far clip multiplier (original PC draw distance slider max)
+    float fogOpacity = 0.5f;   // GTA fog: opacity at the scaled far clip; clear up to half of it
     // shadows
     float shadowDarkness = 0.5f;
     // Post effects drawn by the overlay before the HUD (postfx.cpp)
@@ -46,6 +49,7 @@ struct Config {
     bool  grain = true;            // PS2 rain grain (CPostEffects::Render rain branch, skygfx Grain_PS2)
     float grainStrength = 1.0f;    // grain alpha multiplier (1 = PS2)
     bool  waterDrops = true;       // skygfx neo water drops on the lens (rain, water splashes)
+    int   maxDrops = 2000;         // most drops on screen at once (skygfx MAXDROPS 2000)
     float lodDistance = 1.8f;      // TheCamera.m_fLODDistMultiplier x this (PC draw distance slider: 1.2 default, 1.8 max)
     // characters: roughness towards 1, specular x(1 - matte) on DE's glossy ped materials
     float pedMatte = 0.6f;
@@ -152,6 +156,7 @@ struct LookStats {
     void* tod;
     unsigned frames;
     float fogDensityDE, fogDensityApplied, secondFogDE, farClip;
+    float gtaFogStart, gtaFogFar; // GTA fog: metres (timecyc far clip x FogDistance)
 };
 extern LookStats g_look;
 
@@ -182,7 +187,10 @@ extern volatile bool g_menuOpen;
 void LookPanel();                      // core.cpp: look settings tab
 
 // ---------------------------------------------------------------- post effects (postfx.cpp, render thread)
-struct ID3D11Device; struct ID3D11DeviceContext; struct IDXGISwapChain; struct ID3D11RenderTargetView;
-// Water drops, SpeedFX, radiosity and grain onto the backbuffer (rtv); the context state is saved and restored.
-void PostFxDraw(ID3D11Device* dev, ID3D11DeviceContext* ctx, IDXGISwapChain* sc, ID3D11RenderTargetView* rtv);
+struct ID3D11Device; struct ID3D11DeviceContext; struct ID3D11Texture2D; struct ID3D11RenderTargetView;
+// Water drops, SpeedFX, radiosity and grain onto the backbuffer (back / rtv); the context state is saved and restored.
+void PostFxDraw(ID3D11Device* dev, ID3D11DeviceContext* ctx, ID3D11Texture2D* back, ID3D11RenderTargetView* rtv);
+// D3D12: the effects on `scene` (the frame copied at the HUD bind), composited onto the backbuffer under DE's HUD
+void PostFxDrawUnderHud(ID3D11Device* dev, ID3D11DeviceContext* ctx, ID3D11Texture2D* back, ID3D11RenderTargetView* rtv,
+                        ID3D11Texture2D* scene);
 void PostFxReleaseSized();             // before ResizeBuffers: drops the backbuffer-sized textures

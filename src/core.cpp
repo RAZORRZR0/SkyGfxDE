@@ -114,6 +114,9 @@ void ReadIni() {
     c.haze                = Clamp(IniFloat("Atmosphere", "Haze", 0.35f), 0.0f, 20.0f);
     c.groundHaze          = Clamp(IniFloat("Atmosphere", "GroundHaze", 0.0f), 0.0f, 20.0f);
     c.classicSky          = GetPrivateProfileIntA("Atmosphere", "ClassicSky", 1, ini) != 0;
+    c.gtaFog              = GetPrivateProfileIntA("Atmosphere", "GtaFog", 0, ini) != 0;
+    c.fogDistance         = Clamp(IniFloat("Atmosphere", "FogDistance", 1.8f), 0.5f, 5.0f);
+    c.fogOpacity          = Clamp(IniFloat("Atmosphere", "FogOpacity", 0.5f), 0.05f, 0.95f);
     c.shadowDarkness      = Clamp(IniFloat("Shadows", "Darkness", 0.5f), 0.0f, 1.0f);
     c.speedFx             = GetPrivateProfileIntA("SpeedFX", "Enabled", 1, ini) != 0;
     c.speedFxHudBind      = GetPrivateProfileIntA("SpeedFX", "HudBind", 2, ini);
@@ -125,6 +128,7 @@ void ReadIni() {
     c.grain               = GetPrivateProfileIntA("Grain", "Enabled", 1, ini) != 0;
     c.grainStrength       = Clamp(IniFloat("Grain", "Strength", 1.0f), 0.0f, 10.0f);
     c.waterDrops          = GetPrivateProfileIntA("WaterDrops", "Enabled", 1, ini) != 0;
+    c.maxDrops            = (int)Clamp((float)GetPrivateProfileIntA("WaterDrops", "MaxDrops", 2000, ini), 0.0f, 2000.0f);
     c.lodDistance         = Clamp(IniFloat("World", "LodDistance", 1.8f), 0.1f, 10.0f);
     c.pedMatte            = Clamp(IniFloat("Characters", "Matte", 0.6f), 0.0f, 1.0f);
     c.coronas             = GetPrivateProfileIntA("Coronas", "Enabled", 1, ini) != 0;
@@ -165,6 +169,9 @@ bool SaveIni() {
     PutFloat("Atmosphere", "Haze", c.haze);
     PutFloat("Atmosphere", "GroundHaze", c.groundHaze);
     WritePrivateProfileStringA("Atmosphere", "ClassicSky", c.classicSky ? "1" : "0", g_iniPath);
+    WritePrivateProfileStringA("Atmosphere", "GtaFog", c.gtaFog ? "1" : "0", g_iniPath);
+    PutFloat("Atmosphere", "FogDistance", c.fogDistance);
+    PutFloat("Atmosphere", "FogOpacity", c.fogOpacity);
     PutFloat("Shadows", "Darkness", c.shadowDarkness);
     WritePrivateProfileStringA("SpeedFX", "Enabled", c.speedFx ? "1" : "0", g_iniPath);
     char hb[8]; snprintf(hb, sizeof(hb), "%d", c.speedFxHudBind);
@@ -178,6 +185,7 @@ bool SaveIni() {
     WritePrivateProfileStringA("Grain", "Enabled", c.grain ? "1" : "0", g_iniPath);
     PutFloat("Grain", "Strength", c.grainStrength);
     WritePrivateProfileStringA("WaterDrops", "Enabled", c.waterDrops ? "1" : "0", g_iniPath);
+    { char md[8]; snprintf(md, sizeof(md), "%d", c.maxDrops); WritePrivateProfileStringA("WaterDrops", "MaxDrops", md, g_iniPath); }
     PutFloat("World", "LodDistance", c.lodDistance);
     PutFloat("Characters", "Matte", c.pedMatte);
     WritePrivateProfileStringA("Coronas", "Enabled", c.coronas ? "1" : "0", g_iniPath);
@@ -339,7 +347,10 @@ constexpr size_t TargetColors = 0x458;  // written by CTimeCycle::Update, copied
 constexpr size_t OfSingleton = 0x688;   // AGTATimeOfDay* in DE's engine singleton
 constexpr size_t SkyLightIntensity = 0x66C; // float, sky light intensity (x SkylightColor alpha)
 constexpr size_t CloudyAmount = 0x26A4; // float, CWeather::CloudCoverage (CTimeCycle::Update copies it in)
+constexpr size_t VgdOverrideClass = 0x4770; // TSubclassOf<AVGDOverrideData>: DE's GTA fog StartDistance source
 }
+constexpr size_t UCLASS_CDO = 0x118;          // UClass::ClassDefaultObject
+constexpr size_t VGD_FogStartDistance = 0x220; // float StartDistance, then VolumetricFogExtinctionScale (sub_140B51860)
 namespace PP { // APostProcessVolume::Settings (FPostProcessSettings)
 constexpr size_t Settings = 0x260;
 constexpr size_t OverrideByte0 = 0x00;  // bit 2 ColorSaturation, bit 3 ColorContrast, bit 5 ColorGain
@@ -356,6 +367,9 @@ namespace FOG { // AGTAHeightFog / UExponentialHeightFogComponent
 constexpr size_t Component = 0x2A8;     // AGTAHeightFog::HeightFogComponent
 constexpr size_t Density = 0x1F8;       // FogDensity (DE: FogParameters.x)
 constexpr size_t SecondDensity = 0x200; // SecondFogData.FogDensity (DE: fixed 0.02 ground layer)
+constexpr size_t Tod = 0x2B0;           // AGTAHeightFog::TimeOfDayActor
+constexpr size_t InscatterColor = 0x20C; // component FogInscatteringColor (FLinearColor)
+constexpr size_t UseGtaValues = 0x2A0;  // AGTAHeightFog::bUseGTAValues: DE's timecyc fog path (as in Classic)
 }
 constexpr size_t Obj_Index = 0x0C;
 
@@ -727,21 +741,39 @@ static Rainbow_Fn o_Rainbow = nullptr;
 static void Hooked_MovingFog() { ClassicScope c; o_MovingFog(); }
 static void Hooked_Rainbow(uintptr_t a, uintptr_t b, uintptr_t c) { ClassicScope s; o_Rainbow(a, b, c); }
 
+// GTA fog (ClassicSky=0, GtaFog=1): DE's own timecyc fog path, the one Classic Atmosphere uses, with DE's modern sky.
+// ShouldUseGTAFog (0x140B65820) is true when bUseGTAValues is set. That path turns volumetric fog off unless
+// gta.ShowVolumeFogInClassic is set; the byte is set for the call only. Density and start come from the timecyc far
+// clip x FogDistance (PerFrame), the colour from the time-of-day fog colour.
+uint8_t* g_volFogInClassic = nullptr; // gta.ShowVolumeFogInClassic value, read only by UpdateColors
+static bool GtaFogOn() { return g_active && g_cfg.gtaFog && !g_cfg.classicSky && !UserClassic(); }
+
 static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
     // DE compares its new value with the component before writing; restore DE's values first so its
     // change detection keeps working, then apply ours.
     static float lastDeMain = -1.0f, lastDeSecond = -1.0f, lastMain = -1.0f, lastSecond = -1.0f;
+    static float lastDeCol[4] = { -1, -1, -1, -1 }, lastCol[4] = { -1, -1, -1, -1 };
+    static uint8_t* deActor = nullptr;
+    static uint8_t deUseGta = 0;
     const bool classic = UserClassic();
-    const bool modernOn = g_active && !g_cfg.classicSky && !classic;
+    const bool gtaFog = GtaFogOn();
+    const bool modernOn = g_active && !g_cfg.classicSky && !classic && !gtaFog;
+    uint8_t* actor = (uint8_t*)fogActor;
     uint8_t* comp = nullptr;
     __try {
-        comp = *(uint8_t**)((uint8_t*)fogActor + FOG::Component);
+        if (actor != deActor) { deActor = actor; deUseGta = actor[FOG::UseGtaValues]; }
+        actor[FOG::UseGtaValues] = gtaFog ? 1 : deUseGta;
+        comp = *(uint8_t**)(actor + FOG::Component);
         if (comp && *(float*)(comp + FOG::Density) == lastMain && *(float*)(comp + FOG::SecondDensity) == lastSecond) {
             *(float*)(comp + FOG::Density) = lastDeMain;
             *(float*)(comp + FOG::SecondDensity) = lastDeSecond;
         }
+        if (comp && !memcmp(comp + FOG::InscatterColor, lastCol, 16)) memcpy(comp + FOG::InscatterColor, lastDeCol, 16);
     } __except (EXCEPTION_EXECUTE_HANDLER) { comp = nullptr; }
+    const uint8_t volSaved = g_volFogInClassic ? *g_volFogInClassic : 0;
+    if (g_volFogInClassic && gtaFog) *g_volFogInClassic = 1;
     const uintptr_t r = FogUpdate(fogActor, dt); // outside __try: ClassicScope has a destructor
+    if (g_volFogInClassic) *g_volFogInClassic = volSaved;
     __try {
         if (!comp) return r;
         float* density = (float*)(comp + FOG::Density);
@@ -755,20 +787,39 @@ static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
         // at the original's fog: RW linear fog from the timecyc FogStart (camera fogPlane) to the far clip (x 1.8, the
         // PC draw distance maximum), so 50% opacity halfway. UE 4.26 height fog on a level ray:
         // opacity = 1 - exp(-(ln 2)^2 x FogDensity / 1000 x cm).
+        // GTA fog: DE's density follows a per-weather value more than the timecyc distances (too thick, deaf to
+        // FogDistance), so it is replaced: clear up to StartDistance (half the scaled far clip, set in PerFrame), then
+        // FogOpacity reached at the scaled far clip.
         // ponytail: level ray at fog height; camera height above the fog actor thins it further.
         const float farClip = *(const float*)(g_curColours + CS::FarClip) * 1.8f;
         const float half = 0.5f * (*(const float*)(g_curColours + CS::FogStart) + farClip);
         const bool classicOn = g_active && g_cfg.classicSky && !classic && half > 1.0f;
         const float cap = classicOn ? 0.693147f * 1000.0f / (0.480453f * half * 100.0f) : 0.0f;
+        const float gtaRangeCm = (g_look.gtaFogFar - g_look.gtaFogStart) * 100.0f;
+        const bool gtaOn = gtaFog && gtaRangeCm > 0.0f;
         g_look.farClip = farClip;
-        const float wantMain = modernOn ? *density * g_cfg.haze : classicOn ? fminf(*density, cap) : *density;
-        const float wantSecond = modernOn ? *second * g_cfg.groundHaze : *second;
+        const float wantMain = gtaOn ? -logf(1.0f - g_cfg.fogOpacity) * 1000.0f / (0.480453f * gtaRangeCm)
+                             : modernOn ? *density * g_cfg.haze : classicOn ? fminf(*density, cap) : *density;
+        const float wantSecond = gtaOn || modernOn ? *second * g_cfg.groundHaze : *second;
         g_look.fogDensityApplied = wantMain;
-        if (wantMain != *density || wantSecond != *second) {
+        // GTA fog colour: DE's GTA path copies one static classic colour, which glows at night. Use the time-of-day
+        // sky fog colour instead, the way DE's modern path does (rgb x a, a^2), so it darkens with the clock.
+        float* col = (float*)(comp + FOG::InscatterColor);
+        memcpy(lastDeCol, col, 16);
+        float wantCol[4];
+        memcpy(wantCol, col, 16);
+        const uint8_t* tod = *(uint8_t**)(actor + FOG::Tod);
+        if (gtaOn && tod) {
+            const float* f = (const float*)(tod + TOD::LiveColors + SCS::Fog);
+            wantCol[0] = f[0] * f[3]; wantCol[1] = f[1] * f[3]; wantCol[2] = f[2] * f[3]; wantCol[3] = f[3] * f[3];
+        }
+        if (wantMain != *density || wantSecond != *second || memcmp(wantCol, col, 16)) {
             *density = wantMain;
             *second = wantSecond;
+            memcpy(col, wantCol, 16);
             g_MarkRenderStateDirty(comp);
         }
+        memcpy(lastCol, col, 16);
         lastMain = *density;
         lastSecond = *second;
     } __except (EXCEPTION_EXECUTE_HANDLER) {}
@@ -955,6 +1006,24 @@ static void PerFrame() {
         }
     }
     uint8_t* tod = *g_singleton ? *(uint8_t**)(*g_singleton + TOD::OfSingleton) : nullptr;
+    // GTA fog: fog starts at half the scaled timecyc far clip. The original's fog started near 0 m (timecyc fog start
+    // median 10 m), too thick for DE's full-distance world. DE copies StartDistance every frame from its fog override
+    // data (class default object + 0x220), so the value is written at that source; restored when GTA fog is off.
+    g_look.gtaFogFar = *(const float*)(cc + CS::FarClip) * g_cfg.fogDistance;
+    g_look.gtaFogStart = g_look.gtaFogFar * 0.5f;
+    {
+        static float* startSrc = nullptr;
+        static float startDE = 0.0f;
+        uint8_t* vgdClass = tod ? *(uint8_t**)(tod + TOD::VgdOverrideClass) : nullptr;
+        uint8_t* cdo = vgdClass ? *(uint8_t**)(vgdClass + UCLASS_CDO) : nullptr;
+        float* src = cdo ? (float*)(cdo + VGD_FogStartDistance) : nullptr;
+        if (src != startSrc) {
+            if (startSrc) *startSrc = startDE;
+            startSrc = src;
+            if (src) startDE = *src;
+        }
+        if (startSrc) *startSrc = GtaFogOn() ? g_look.gtaFogStart * 100.0f : startDE;
+    }
     // Shadows: the light filling shadowed areas is DE's sky light. Its update (0x140BBF6D0) sets the component's
     // intensity to AGTATimeOfDay::SkyLightIntensity (+0x66C) x the live SkylightColor alpha; the alpha is rewritten
     // by DE after this hook, so SkyLightIntensity is scaled by 1 - Darkness x timecyc shadow strength (the original
@@ -989,10 +1058,10 @@ static void PerFrame() {
         const float* p1 = (const float*)(cc + CS::PostFx1);
         const float* p2 = (const float*)(cc + CS::PostFx2);
         Log(1, "frames=%u active=%d classic=%d volumes=%d postfx1=(%.0f %.0f %.0f a%.0f) postfx2=(%.0f %.0f %.0f a%.0f) "
-               "gain=(%.3f %.3f %.3f) shadow=%.2f indirect=%.2f fog=%.5f->%.5f groundFog=%.4f classicSky=%d farClip=%.0f",
+               "gain=(%.3f %.3f %.3f) shadow=%.2f indirect=%.2f fog=%.5f->%.5f groundFog=%.4f classicSky=%d gtaFog=%d farClip=%.0f",
             g_look.frames, g_active, classic, volumes, p1[0], p1[1], p1[2], p1[3], p2[0], p2[1], p2[2], p2[3],
             g_gain[0], g_gain[1], g_gain[2], shadow, g_indirect, g_look.fogDensityDE, g_look.fogDensityApplied, g_look.secondFogDE,
-            g_cfg.classicSky, g_look.farClip);
+            g_cfg.classicSky, GtaFogOn(), g_look.farClip);
         lastLog = now;
     }
 }
@@ -1073,6 +1142,9 @@ bool Install() {
     g_timecycTableOk = ResolveTimecycTable(ctor, 1100);
     Log(1, "timecyc table %s", g_timecycTableOk ? "read from CColourSet::CColourSet" : "NOT found: Timecyc.File ignored");
     g_MarkRenderStateDirty = (MarkDirty_Fn)markDirty;
+    static const uint8_t cmpByte[] = { 0x80, 0x3D }; // UpdateColors+0x84: cmp cs:gta.ShowVolumeFogInClassic, 0
+    g_volFogInClassic = RipAt(fogUpdate + 0x84, cmpByte, 2, 7);
+    if (!g_volFogInClassic) Log(1, "gta.ShowVolumeFogInClassic not found: GTA fog turns volumetric fog off");
     g_cloudCVar = FindIntCVar(L"r.VolumetricCloud");
     Log(1, g_cloudCVar ? "r.VolumetricCloud found" : "r.VolumetricCloud NOT found: volumetric clouds stay with the Classic sky");
     // CColourSet::CColourSet tail: mov edi, [base + rva weather->curve set table + rdi*4] (ctor+0x3EF), then
@@ -1205,9 +1277,18 @@ void LookPanel() {
         if (g_cfg.classicSky) {
             ImGui::Text("fog density %.5f   ground layer %.4f (DE's values)", g_look.fogDensityDE, g_look.secondFogDE);
         } else {
-            SliderBox("Haze (height fog)", &g_cfg.haze, 0.0f, 2.0f, 0.0f, 20.0f);
-            SliderBox("Ground haze", &g_cfg.groundHaze, 0.0f, 2.0f, 0.0f, 20.0f);
-            ImGui::Text("fog density DE %.5f -> %.5f   ground layer DE %.4f", g_look.fogDensityDE, g_look.fogDensityApplied, g_look.secondFogDE);
+            ImGui::Checkbox("GTA fog (timecyc far clip)", &g_cfg.gtaFog);
+            if (g_cfg.gtaFog) {
+                SliderBox("Fog distance", &g_cfg.fogDistance, 0.5f, 5.0f, 0.5f, 5.0f, "x%.2f");
+                SliderBox("Fog at far clip", &g_cfg.fogOpacity, 0.05f, 0.95f, 0.05f, 0.95f);
+                SliderBox("Ground haze", &g_cfg.groundHaze, 0.0f, 2.0f, 0.0f, 20.0f);
+                ImGui::Text("clear to %.0f m, %.0f%% at %.0f m   density %.5f", g_look.gtaFogStart, g_cfg.fogOpacity * 100.0f,
+                            g_look.gtaFogFar, g_look.fogDensityApplied);
+            } else {
+                SliderBox("Haze (height fog)", &g_cfg.haze, 0.0f, 2.0f, 0.0f, 20.0f);
+                SliderBox("Ground haze", &g_cfg.groundHaze, 0.0f, 2.0f, 0.0f, 20.0f);
+                ImGui::Text("fog density DE %.5f -> %.5f   ground layer DE %.4f", g_look.fogDensityDE, g_look.fogDensityApplied, g_look.secondFogDE);
+            }
         }
     }
     if (ImGui::CollapsingHeader("Timecyc colours", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1262,6 +1343,7 @@ void LookPanel() {
         ImGui::Checkbox("Grain (rain)", &g_cfg.grain);
         ImGui::SameLine();
         ImGui::Checkbox("Water drops", &g_cfg.waterDrops);
+        SliderBoxInt("Max water drops", &g_cfg.maxDrops, 0, 2000, 0, 2000);
         SliderBoxInt("Radiosity intensity", &g_cfg.radiosityIntensity, 0, 255, 0, 255);
         SliderBox("Radiosity offset (PS2 px)", &g_cfg.radiosityOffset, 0.0f, 12.0f, 0.0f, 64.0f, "%.1f");
         SliderBox("Grain strength", &g_cfg.grainStrength, 0.0f, 2.0f, 0.0f, 10.0f);

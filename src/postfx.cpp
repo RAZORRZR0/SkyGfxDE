@@ -11,6 +11,7 @@
 static ID3D11Device* D = nullptr;
 static ID3D11DeviceContext* C = nullptr;
 static ID3D11RenderTargetView* g_back = nullptr; // backbuffer RTV (overlay.cpp's)
+static ID3D11Texture2D* g_backTex = nullptr;    // backbuffer (D3D11: the swap chain's; DX12: the D3D11On12-wrapped current one)
 static UINT W = 0, H = 0;
 static DXGI_FORMAT F = DXGI_FORMAT_UNKNOWN;
 
@@ -34,10 +35,16 @@ static const char kHlsl[] =
     "  pos = float4(xy.x * p.z * 2 - 1, 1 - xy.y * p.w * 2, 0, 1); c = col; uvo = uv; }\n"
     "float4 psDrop(float4 pos : SV_Position, float4 c : COLOR, float4 uv : TEXCOORD0) : SV_Target {\n"
     "  float2 d = uv.xy * 2 - 1; float r = dot(d, d);\n"
-    "  return float4(T.Sample(S, uv.zw).rgb * c.rgb * lerp(1.0, 0.75, r), c.a * saturate((1 - r) * 3)); }\n";
+    "  return float4(T.Sample(S, uv.zw).rgb * c.rgb * lerp(1.0, 0.75, r), c.a * saturate((1 - r) * 3)); }\n"
+    // D3D12 under-HUD composite: t0 final frame (HUD drawn), t1 scene copied at the HUD bind, t2 the effects on t1.
+    // Pixels the HUD left untouched still equal the scene: they take the effects; the others keep the HUD.
+    "Texture2D Sc : register(t1); Texture2D Wk : register(t2);\n"
+    "float4 composite(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target {\n"
+    "  int3 c = int3(pos.xy, 0); float3 f = T.Load(c).rgb;\n"
+    "  return float4(any(abs(f - Sc.Load(c).rgb) > 0.0005) ? f : Wk.Load(c).rgb, 1); }\n";
 
 static ID3D11VertexShader *g_vs = nullptr, *g_vsDrop = nullptr;
-static ID3D11PixelShader *g_ps = nullptr, *g_psThresh = nullptr, *g_psGrain = nullptr, *g_psDrop = nullptr;
+static ID3D11PixelShader *g_ps = nullptr, *g_psThresh = nullptr, *g_psGrain = nullptr, *g_psDrop = nullptr, *g_psComposite = nullptr;
 static ID3D11InputLayout* g_dropLayout = nullptr;
 static ID3D11Buffer *g_cb = nullptr, *g_dropVb = nullptr;
 static ID3D11SamplerState *g_point = nullptr, *g_linear = nullptr, *g_wrap = nullptr;
@@ -86,6 +93,7 @@ static bool Init() {
     makePs("thresh", &g_psThresh);
     makePs("grain", &g_psGrain);
     makePs("psDrop", &g_psDrop);
+    makePs("composite", &g_psComposite);
 
     D3D11_BUFFER_DESC cb{ 48, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE };
     D3D11_BUFFER_DESC vb{ MAXDROPS * 6 * sizeof(DropVertex), D3D11_USAGE_DYNAMIC, D3D11_BIND_VERTEX_BUFFER, D3D11_CPU_ACCESS_WRITE };
@@ -123,6 +131,7 @@ static bool Init() {
 struct Rt { ID3D11Texture2D* t; ID3D11RenderTargetView* rtv; ID3D11ShaderResourceView* srv; UINT w, h; };
 static Rt g_copy{};       // CPostEffects::pRasterFrontBuffer
 static Rt g_rad[8]{};     // radiosity: halvings [0, g_radN), threshold result [g_radN]
+static Rt g_frame{}, g_scene{}, g_work{}; // D3D12 under-HUD: final frame, scene at the HUD bind, effects target
 static int g_radN = 0;
 
 static void Free(Rt& r) {
@@ -135,6 +144,7 @@ static void Free(Rt& r) {
 void PostFxReleaseSized() {
     Free(g_copy);
     for (Rt& r : g_rad) Free(r);
+    Free(g_frame); Free(g_scene); Free(g_work);
     g_radN = 0;
     W = H = 0;
 }
@@ -149,12 +159,9 @@ static bool Make(Rt& r, UINT w, UINT h, bool target) {
 
 // Radiosity works at the PS2's scale: m_RadiosityFilterPasses (2) halvings of 640x448, plus the halvings that bring
 // this backbuffer's height down to about 448.
-static bool Sized(IDXGISwapChain* sc) {
-    ID3D11Texture2D* back = nullptr;
-    if (FAILED(sc->GetBuffer(0, IID_PPV_ARGS(&back)))) return false;
+static bool Sized() {
     D3D11_TEXTURE2D_DESC td;
-    back->GetDesc(&td);
-    back->Release();
+    g_backTex->GetDesc(&td);
     if (td.Width == W && td.Height == H && td.Format == F && g_copy.t) return true;
     PostFxReleaseSized();
     W = td.Width; H = td.Height; F = td.Format;
@@ -167,12 +174,7 @@ static bool Sized(IDXGISwapChain* sc) {
     return ok;
 }
 
-static void Grab(IDXGISwapChain* sc) {
-    ID3D11Texture2D* back = nullptr;
-    if (FAILED(sc->GetBuffer(0, IID_PPV_ARGS(&back)))) return;
-    C->CopyResource(g_copy.t, back);
-    back->Release();
-}
+static void Grab() { C->CopyResource(g_copy.t, g_backTex); }
 
 // One full-screen quad into rt: uv rectangle per corner (TL, TR, BL, BR as 12 floats incl. p), shader, blend, sampler.
 static void Quad(ID3D11RenderTargetView* rt, UINT w, UINT h, ID3D11ShaderResourceView* src, ID3D11PixelShader* ps,
@@ -201,11 +203,11 @@ static void Rect(ID3D11RenderTargetView* rt, UINT w, UINT h, ID3D11ShaderResourc
 // The frame is copied once, then drawn `passes` times as a full-screen strip quad at alpha 36 with point sampling and
 // clamp, each pass shrinking the UV rectangle by shift * 0.0025 per side (a zoom) plus a per-frame random wobble of
 // wobble * 0.004 * rand()/32767, with the original's corner signs (BL's v uses the u wobble, as in 0x7030A0).
-static void SpeedFx(IDXGISwapChain* sc) {
+static void SpeedFx() {
     const int packed = g_speedFxRow, row = packed & 0xFF, look = packed >> 8; // look: 1 behind, 2 sideways
     // Looking behind, the original zeroes every UV offset: each pass redraws the frame onto itself, no visible change.
     if (packed < 0 || row > 6 || look == 1) return;
-    Grab(sc);
+    Grab();
     const SpeedFxRow& r = kSpeedFx[row];
     const int shift = look ? r.shift / 2 : r.shift, wobble = look ? 0 : r.wobble; // integer halving, as in 0x7030A0
     const float u0 = 0, v0 = 0, u1 = 1, v1 = 1; // whole copy (the original's raster could be larger than the screen)
@@ -231,10 +233,10 @@ static void SpeedFx(IDXGISwapChain* sc) {
 // 2. D = 2 * (D - limit/2) saturated, limit = CTimeCycle::m_CurrentColours.m_nHighLightMinIntensity (timecyc column
 //    50, "IntensityLimit") * 128/255;
 // 3. added to the frame with SRCALPHA/ONE at alpha m_RadiosityIntensity, m_RadiosityRenderPasses (1) times.
-static void Radiosity(IDXGISwapChain* sc) {
+static void Radiosity() {
     if (!g_cfg.radiosity || !g_curColours) return;
     const int limit = *(const int32_t*)(g_curColours + 0x9C) * 128 / 255; // CColourSet::m_nHighLightMinIntensity
-    Grab(sc);
+    Grab();
     const float ou = g_cfg.radiosityOffset / 640, ov = g_cfg.radiosityOffset / 448;
     Rect(g_rad[0].rtv, g_rad[0].w, g_rad[0].h, g_copy.srv, g_ps, nullptr, g_linear, ou, ov, 1 + ou, 1 + ov, 1);
     for (int i = 1; i < g_radN; ++i)
@@ -280,7 +282,7 @@ static int SC(float x) { return (int)(x * g_scaling); }
 static constexpr float MAXSIZE = 15, MINSIZE = 4;
 
 static Drop* PlaceNew(float x, float y, float size, float ttl, bool fades) {
-    if (g_fx.noDrops) return nullptr;
+    if (g_fx.noDrops || g_numDrops >= g_cfg.maxDrops) return nullptr; // [WaterDrops] MaxDrops (skygfx: 2000)
     for (Drop& d : g_drops) {
         if (d.active) continue;
         ++g_numDrops;
@@ -380,7 +382,7 @@ static void ClearDrops() {
     g_numDrops = g_numMoving = 0;
 }
 
-static void WaterDrops(IDXGISwapChain* sc) {
+static void WaterDrops() {
     static LARGE_INTEGER freq{}, last{};
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
@@ -415,7 +417,7 @@ static void WaterDrops(IDXGISwapChain* sc) {
     C->Unmap(g_dropVb, 0);
     if (!n) return;
 
-    Grab(sc);
+    Grab();
     const float c[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1.0f / W, 1.0f / H };
     if (FAILED(C->Map(g_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) return;
     memcpy(m.pData, c, 48);
@@ -481,11 +483,7 @@ struct SavedState {
     }
 };
 
-void PostFxDraw(ID3D11Device* dev, ID3D11DeviceContext* ctx, IDXGISwapChain* sc, ID3D11RenderTargetView* rtv) {
-    D = dev; C = ctx; g_back = rtv;
-    if (!g_active || !rtv || !Init() || !Sized(sc)) return;
-    SavedState s{};
-    s.Save();
+static void Run() {
     C->OMSetDepthStencilState(g_depth, 0);
     C->RSSetState(g_raster);
     C->IASetInputLayout(nullptr);
@@ -494,9 +492,48 @@ void PostFxDraw(ID3D11Device* dev, ID3D11DeviceContext* ctx, IDXGISwapChain* sc,
     C->GSSetShader(nullptr, nullptr, 0);
     C->VSSetConstantBuffers(0, 1, &g_cb);
     C->PSSetConstantBuffers(0, 1, &g_cb);
-    WaterDrops(sc);
-    SpeedFx(sc);
-    Radiosity(sc);
+    WaterDrops();
+    SpeedFx();
+    Radiosity();
     Grain();
+}
+
+static bool Begin(ID3D11Device* dev, ID3D11DeviceContext* ctx, ID3D11Texture2D* back, ID3D11RenderTargetView* rtv) {
+    D = dev; C = ctx; g_back = rtv; g_backTex = back;
+    return g_active && rtv && back && Init() && Sized();
+}
+
+void PostFxDraw(ID3D11Device* dev, ID3D11DeviceContext* ctx, ID3D11Texture2D* back, ID3D11RenderTargetView* rtv) {
+    if (!Begin(dev, ctx, back, rtv)) return;
+    SavedState s{};
+    s.Save();
+    Run();
+    s.Restore();
+}
+
+void PostFxDrawUnderHud(ID3D11Device* dev, ID3D11DeviceContext* ctx, ID3D11Texture2D* back, ID3D11RenderTargetView* rtv,
+                        ID3D11Texture2D* scene) {
+    if (!Begin(dev, ctx, back, rtv)) return;
+    if (!g_work.t && !(Make(g_frame, W, H, false) && Make(g_scene, W, H, false) && Make(g_work, W, H, true))) {
+        Free(g_frame); Free(g_scene); Free(g_work);
+        return;
+    }
+    SavedState s{};
+    s.Save();
+    C->CopyResource(g_frame.t, back);
+    C->CopyResource(g_scene.t, scene);
+    C->CopyResource(g_work.t, scene);
+    g_backTex = g_work.t; g_back = g_work.rtv; // the effects run on the scene as if it were the backbuffer
+    Run();
+    C->OMSetRenderTargets(1, &rtv, nullptr);
+    const D3D11_VIEWPORT vp{ 0, 0, (float)W, (float)H, 0, 1 };
+    C->RSSetViewports(1, &vp);
+    C->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
+    C->PSSetShader(g_psComposite, nullptr, 0);
+    ID3D11ShaderResourceView* srvs[3] = { g_frame.srv, g_scene.srv, g_work.srv };
+    C->PSSetShaderResources(0, 3, srvs);
+    C->Draw(4, 0);
+    ID3D11ShaderResourceView* none[3] = {};
+    C->PSSetShaderResources(0, 3, none);
     s.Restore();
 }
