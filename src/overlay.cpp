@@ -346,8 +346,10 @@ static void RenderFrame(IDXGISwapChain* sc) {
         PostFxDrawUnderHud(g_device, g_context, g_backRes, g_rtv, g_scene11);
     }
     // HudBind not reached (or 0): at Present, under ImGui. D3D12 menus/loading screens never reach the HUD bind (no 3D
-    // scene under them): no effects there, as on D3D11 where the menu is drawn over them.
-    else if (!g_fxDrawn && (!g_on12 || g_cfg.speedFxHudBind == 0)) PostFxDraw(g_device, g_context, g_backRes, g_rtv);
+    // scene under them): no effects there, as on D3D11 where the menu is drawn over them. Cutscenes reach it only on
+    // frames with subtitles (no HUD otherwise), so they always take this path when it isn't reached.
+    else if (!g_fxDrawn && (!g_on12 || g_cfg.speedFxHudBind == 0 || (g_cutsceneRunning && *g_cutsceneRunning)))
+        PostFxDraw(g_device, g_context, g_backRes, g_rtv);
     ImDrawData* dd = ImGui::GetDrawData();
     if (dd && dd->CmdListsCount > 0 && g_rtv) {
         ID3D11RenderTargetView* prevRtv[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};

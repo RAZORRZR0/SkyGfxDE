@@ -139,6 +139,7 @@ void ReadIni() {
     c.lampShadowDistance  = Clamp(IniFloat("StreetLights", "ShadowDistance", 50.0f), 0.0f, 1000.0f);
     c.otherLightShadows   = GetPrivateProfileIntA("StreetLights", "OtherLightShadows", 1, ini) != 0;
     c.bollardBrightness   = Clamp(IniFloat("StreetLights", "BollardBrightness", 0.5f), 0.0f, 4.0f);
+    c.globeLampBrightness = Clamp(IniFloat("StreetLights", "GlobeLampBrightness", 8.0f), 0.0f, 50.0f);
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 0.1f, 1000.0f);
     c.noclipSpeed         = Clamp(IniFloat("Tools", "NoclipSpeed", 15.0f), 0.1f, 1000.0f);
     GetPrivateProfileStringA("Timecyc", "File", "timecyc_ps2.dat", c.timecycFile, MAX_PATH, ini);
@@ -196,6 +197,7 @@ bool SaveIni() {
     PutFloat("StreetLights", "ShadowDistance", c.lampShadowDistance);
     WritePrivateProfileStringA("StreetLights", "OtherLightShadows", c.otherLightShadows ? "1" : "0", g_iniPath);
     PutFloat("StreetLights", "BollardBrightness", c.bollardBrightness);
+    PutFloat("StreetLights", "GlobeLampBrightness", c.globeLampBrightness);
     PutFloat("Tools", "FreecamSpeed", c.freecamSpeed);
     PutFloat("Tools", "NoclipSpeed", c.noclipSpeed);
     const bool ok = WritePrivateProfileStringA("Timecyc", "File", c.timecycFile, g_iniPath) != 0;

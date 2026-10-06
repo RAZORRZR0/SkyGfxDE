@@ -61,8 +61,9 @@ struct Config {
     // street lights (streetlights.cpp): DE's lamp light components
     float lampDrawDistance = 150.0f;  // m: gta.streetlightdistance (DE: 4 cm, lamp lights culled); 0 = DE's
     float lampShadowDistance = 50.0f; // m: gta.streetlight.shadowdistance (DE: 4 cm, no shadows); 0 = DE's
-    bool  otherLightShadows = true;   // park bollards cast shadows (DE: bNeverCastShadows)
+    bool  otherLightShadows = true;   // every world light casts shadows (DE: most don't; bollards bNeverCastShadows)
     float bollardBrightness = 0.5f;   // park bollard light intensity multiplier (1 = DE's)
+    float globeLampBrightness = 8.0f; // SF park globe lamp light multiplier (1 = DE's: no pool of light)
     // timecyc
     char  timecycFile[MAX_PATH] = "timecyc_ps2.dat";
     // tools
@@ -91,6 +92,7 @@ struct FxState {
     bool  hideDrops;    // cutscene, or 1st-person camera on foot
 };
 extern FxState g_fx;
+extern uint8_t* g_cutsceneRunning; // CCutsceneMgr::ms_running (tools.cpp)
 extern volatile int g_splash;  // WaterDrops::ms_splashDuration request from DE's water splash FX (game thread)
 extern volatile LONG g_dropFill; // WaterDrops::FillScreenMoving amount (float bits) from boat splash / wake particles
 extern char g_dir[MAX_PATH];

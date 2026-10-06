@@ -1,0 +1,5 @@
+PASS game alive through the toggles
+PASS no new crash report
+PASS no exception in SkyGfxDE.log
+PASS lights given shadows
+PASS fixture meshes without shadow

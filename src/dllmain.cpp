@@ -19,7 +19,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
         OpenLog();
         char exe[MAX_PATH] = "?";
         GetModuleFileNameA(nullptr, exe, MAX_PATH);
-        Log(1, "SkyGfxDE 1.2.4 | exe %s | ini %s", exe, g_iniPath);
+        Log(1, "SkyGfxDE 1.2.5 | exe %s | ini %s", exe, g_iniPath);
         Log(1, "keys: menu=%s look=%s reload=%s freecam=%s noclip=%s", g_cfg.keyMenu.text, g_cfg.keyToggle.text,
             g_cfg.keyReload.text, g_cfg.keyFreecam.text, g_cfg.keyNoclip.text);
         if (!g_cfg.enabled) { Log(1, "disabled in ini"); return TRUE; }
