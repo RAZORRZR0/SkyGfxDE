@@ -279,5 +279,9 @@ void CoronasPanel() {
     SliderBox("Size", &g_cfg.coronaSize, 0.1f, 2.0f, 0.0f, 20.0f);
     SliderBox("Intensity", &g_cfg.coronaIntensity, 0.0f, 4.0f, 0.0f, 100.0f);
     SliderBox("Far clip (0 = auto)", &g_cfg.coronaFarClip, 0.0f, 5000.0f, 0.0f, 20000.0f, "%.0f m");
+}
+
+void CoronasInfo() {
+    if (!g_coronasOk) { ImGui::TextDisabled("unavailable (see SkyGfxDE.log)"); return; }
     ImGui::Text("%d lamps, %d coronas now", (int)g_lamps.size(), g_shown);
 }

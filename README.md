@@ -15,7 +15,6 @@ x64 ASI plugin for **GTA San Andreas – The Definitive Edition**. It brings bac
 - **Radiosity** (the PS2 glow), with DE's bloom turned down while it runs.
 - **SpeedFX** (the original speed blur), ported from the 1.0 exe, including nitro, looking behind/sideways and cutscenes.
 - **PS2 rain grain** and **neo water drops** on the lens (rain, splashes, boats, hydrants and fountains).
-- **Matte characters**: less plastic-looking ped skin, clothes and hair.
 - **Street light pools and shadows**: DE's lamp lights exist but are culled at 4 cm, with a 4 cm shadow distance; they get a real draw distance and dynamic shadows, so lamps light the street below them again and peds and cars cast shadows in the pools.
 - All post effects are drawn **before the HUD**, so the HUD stays sharp.
 - **PC-style draw distance**: DE dropped the PC draw-distance factor from its LOD multiplier; it is put back (default 1.8, adjustable).
@@ -34,13 +33,19 @@ All defaults are Ctrl+Shift chords, so they work on 60% keyboards (no F-keys, ar
 
 | Key | Action |
 |---|---|
-| Ctrl+Shift+M | Open/close the menu (World and Look tabs) |
+| Ctrl+Shift+M | Open/close the menu |
 | Ctrl+Shift+E | Turn the look on/off (A/B comparison) |
 | Ctrl+Shift+R | Reload `SkyGfxDE.ini` |
 | Ctrl+Shift+F | Freecam |
 | Ctrl+Shift+N | Noclip |
 
 In freecam and noclip: WASD moves, Space goes up, C goes down, Shift is ×5, Alt is ×0.2, and the mouse wheel changes freecam speed. The look direction is the game's own camera, so the mouse works as usual (and its in-game sensitivity applies); keyboard, mouse buttons and the wheel are kept away from the game.
+
+## Menu
+
+**Ctrl+Shift+M** opens the menu. Its header has **Effect on** (the toggle key is shown next to it), **Save** (writes the values to `SkyGfxDE.ini`) and **Reload** (re-reads it). A warning shows there when the in-game Classic Atmosphere option is on.
+
+The tabs are **Colour**, **Sky & fog**, **Lighting**, **Effects**, **World** (debug tools, below) and **Info**. The settings tabs hold controls only: every live readout (numbers, state, swatches, counts, DE's values) is in **Info**. The World tab keeps its own status lines.
 
 ## World tab (debug tools)
 
@@ -56,12 +61,17 @@ In freecam and noclip: WASD moves, Space goes up, C goes down, Shift is ×5, Alt
 - **Timelapse.** Runs the clock at *Timelapse speed* (default 240×, a game day in 6 s) until unticked, even with *Freeze time* on.
 - **Noclip.** Moves the player, or their vehicle, along the camera heading with collision off. Collision is restored when you turn it off. If you turn it off high up, you will fall.
 
-## Look tab
+## Settings tabs
 
-Every look setting can be changed live, and **Save to ini** writes the values back to the ini.
+**Colour**, **Sky & fog**, **Lighting** and **Effects** hold the look settings. Every one can be changed live, and **Save** writes the values back to the ini.
+
+### Colour
 
 - **PS2 colour filter.** Uses skygfx's `ColourFilter_PS2` formula (`gain = 2·postfx1 + 2·postfx2·min(1, 2·alpha2)`) on the timecyc postfx colours. That gain is a display-space multiply; DE's `ColorGain` works on linear colour before Unreal's filmic tone curve, so each channel is converted to the `ColorGain` that gives the same display change at mid grey (UE 4.26 `FilmToneMap` with the film settings of DE's outdoor post-process volume, which overrides slope and toe, then sRGB). A plain gamma-2.2 power, used before, crushed the weak channels in the curve's toe: PS2 LA midday blue came out at 0.37 instead of skygfx's 0.64, which made midday strongly yellow. Shadows still get slightly more of the tint and highlights slightly less, since a gain before a tone curve can't be a display multiply everywhere. The result is multiplied onto the `ColorGain` of every `AGTAPostProcessVolume`, so the brightness option keeps working. With the game's own timecyc (PC/mobile-style postfx values), it is applied as a tint only at `GameTimecycStrength`. A PS2 `timecyc.dat` set in `[Timecyc] File` gets the full filter. The PS2 version's file is `data\colorcycle.dat` (same 52-column format, 23 weathers × 8 hours); copy it next to the `.asi` as e.g. `timecyc_ps2.dat` and set `File=timecyc_ps2.dat`.
 - **Grade.** Saturation and contrast multipliers on DE's own values.
+
+### Sky & fog
+
 - **Atmosphere.** Three modes:
   - **Classic sky** (`ClassicSky=1`, default). Classic Atmosphere is the global flag `byte_145024151`. Every `AGTATimeOfDay` method that reads it takes its classic data when the actor allows overrides (`+0x37F0`): the classic override colour sets (`+0x38A8…` instead of `+0x28B8…`), the classic override object (`+0x4770`, e.g. the sky dome's `CloudsTexture1/2`); `ShouldUseGTAFog` (`0x140B65820`) turns on DE's GTA fog. The flag is set only while `AGTATimeOfDay::Tick` (`0x140BB5C10`, signature) and `AGTAHeightFog::UpdateColors` run.
     - Classic's override sets also relight the world (green sky light, an orange sun at 1/5 alpha, its own post settings: 10:00 countryside red/blue 6.4 vs DE's 1.8, as with DE's own Classic setting). So the colour update (`0x140BB7B60`) runs twice: Classic, then modern with the flag cleared, and only Classic's `FSkyColorSet` sky fields are kept: `SkyLower/UpperColor` (`0x10–0x30`), `CloudParams … GTAFogParam_Blend` (`0x50–0x104`), `FogColor`, `FogParameters`, `MoonColor`, `StarsColor` (`0x118–0x158`), `MovingFogIntensity` (`0x190`). Sky light, reflection, camera, VGD/post settings, sun, sunshine, uplighting and city glow stay modern.
@@ -83,7 +93,18 @@ Every look setting can be changed live, and **Save to ini** writes the values ba
   - `Brightness` (default 1): sky top/bottom/reflection (rgb × alpha) and fog (rgb) move to `K × luminance(linear timecyc colour)`. `K` is calibrated per weather: DE's own value for that weather at 12:00 / that weather's timecyc noon colour, blended between the old and new weather like the timecyc. DE's 12:00 value comes from its sky curve evaluator (`sub_140BAE000`, as `CColourSet::CColourSet` calls it) on the weather's curve set (`TOD +0x7A0 + 0x158 × set`; DE maps the 23 weathers to 7 sets, `dword_144222DC0`). Every weather's midday keeps DE's brightness, so auto-exposure stays calibrated, and every other hour follows the timecyc. Alpha moves to 1 with Brightness: DE fades its sky layers with alpha (sky top is 0 at night), and dividing the target by it once blew the night sky up to bright cyan.
   - `Brightness` also scales the sun by the original's day/night balance (`CCustomBuildingRenderer::UpdateDayNightBalanceParam`: day 7:00–20:00, fading 6–7 and 20–21), using the clock DE's colour update reads (engine singleton vfunc `+0x378`). `Brightness=0` is DE's brightness and sun hours with the timecyc hue.
   - `NightExposure` (default −0.5; 0 = DE's night exposure, range −10…10; positive brightens nights) is added to the exterior post-process volume's `AutoExposureBias` (`+0x314`, override bit `+0x0A` bit 6) × night (the same day/night balance), independent of Brightness. DE lights the night street with its own local lights and neon, where the original used prelit night vertex colours: at 22:00 in front of the Four Dragons the street was about 2× the original's (+ skygfx) brightness, which −1.8 matches (calibrated on that one scene). Every menu slider has a box next to it for typed values beyond the slider's range.
+
+### Lighting
+
 - **Shadows.** Shadowed areas are lit by DE's sky light, whose intensity DE sets to `AGTATimeOfDay::SkyLightIntensity` (`+0x66C`) × the live `SkylightColor` alpha (`0x140BBF6D0`). `SkyLightIntensity` is multiplied by `1 − Darkness × timecyc shadow strength` (the original drew shadows at that alpha); DE's value is kept and restored. The sun's shadow maps are untouched. (Before v1.2 this scaled the post-process `IndirectLightingIntensity`, which DE's dynamic lighting ignores, and the SkylightColor, which DE rewrites after the hook; `test/e2e_ab.py` measured no change with either.)
+- **Street lights.** DE's lamps are `AStreetLightMapActor` actors with spot and point light components (1100+ in Los Santos), switched on at night by DE. DE's lamp update (`0x140C206C0`, a virtual of the lamp actor) gives each light `MaxDrawDistance` (`ULightComponent +0x22C`) = `gta.streetlightdistance` (int, cm; registered default 16000) and its engine's per-light shadow distance (`+0x324`) = `gta.streetlight.shadowdistance` (0 = the Streetlights option's `Spot/PointLightShadowDistance`). In game both read 4 cm, so UE culls every lamp light (only the emissive lamp heads glow) and none casts a shadow. SkyGfxDE finds both cvars' storage from their `RegisterConsoleVariableRef` call (`lea r8, var` before `lea rdx, L"name"`) and sets them every frame to `DrawDistance` (default 150 m) and `ShadowDistance` (default 50 m); DE applies them to each lamp as it streams in. An earlier version wrote the light components directly; it crashed the game with heap corruption shortly after loading, so nothing but the two cvars is touched now. A jevify pass over the 31 game functions under the lamp actor's natives (`SetLights`, `SetLowQualityLights`, `SetLightVisibility`, …) mapped the lamp code; the cvars lead to the lamp update.
+  - The park bollards (`BP_Streetlight_BollardPark_C`) never cast shadows: they are lamp actors with `AStreetLightMapActor::bNeverCastShadows` (`+0x300` bit 7), and DE's lamp update (`0x140C206C0`) sets each lamp light's `CastShadows` to `!bNeverCastShadows && the Streetlights option's shadow switch` every time it runs, so a plain `SetCastShadows` from outside is undone at the next update. Their blueprint also has `CastDynamicShadows` (`+0x214` bit 3) off, which a movable light needs to cast any shadow and which has no setter (found by dumping the bollard lights' state in game). With `[StreetLights] OtherLightShadows=1` (default) the actor's bit is cleared, `CastDynamicShadows` is set, and UE's own `ULightComponentBase::SetCastShadows` (false, then true, to force the re-register) is called through `ProcessEvent`, so later lamp updates keep them on, within `ShadowDistance`. `BollardBrightness` (default 0.5) scales their light through `ULightComponent::SetIntensity`. Both run in `AGTATimeOfDay::Tick`, on UE's game thread (`CTimeCycle::Update`, where the other look hooks run, is not), and are put back with the look off. The game thread is the one owning the game window (`OnGameThread`).
+  - **Every world light** (`OtherLightShadows=1`): the same is done for every point/spot light whose owner isn't a vehicle, pickup, explosion or other moving/effect actor (16 owner classes, sorted out of DE's 158 light-owning blueprints). A shadowed light sits inside its own fixture (e.g. SF Chinatown's `chinalamp_sf` lantern), which then blacked it out within the shadow distance while far lamps still lit the street; so the owner's small meshes (bounds radius < 6 m) stop casting shadows through `UPrimitiveComponent::SetCastShadow`. Those fixtures then cast no sun shadow either.
+  - **SF park globe lamps** (`BP_Streetlamp1/2_C`) light the path again: their point light is 8500 with a 9.5 m radius (a lamppost's spot is 80000), so even unshadowed they left no pool of light. `GlobeLampBrightness` (default 8) multiplies it through `SetIntensity`.
+- **Distant lamp coronas.** After Project2DFX's SALodLights: `SALodLights.dat` (shipped next to the `.asi`) lists corona offsets per lamp model. Every IPL instance of those models that `CFileLoader::LoadObjectInstance` builds while the level loads becomes a lamp. At night (p2dfx's 20:00–07:00 fade), lamps past the range of the model's own corona and inside the far clip get a corona in DE's `UGTACoronaComponent` (`AGTAWorldSettings::GetCoronaComponent`, the one DE's lights use, through `ProcessEvent` `AddCorona` / `UpdateCorona` / `RemoveCorona`), so terrain and buildings hide them. `[Coronas]` Size, Intensity, FarClip (0 = timecyc far clip).
+
+### Effects
+
 - **SpeedFX.** The original's speed blur, ported from `CPostEffects::SpeedFX` in gta_sa.exe 1.0 US (`0x7030A0`; gta-reversed doesn't reverse it) and the call in `CPostEffects::Render`.
   - The trigger: the player is in a vehicle that isn't a plane, heli, boat or train (`m_nVehicleSubType +0x894` = 3/4/5/6; the base type `+0x890` is 0 for planes and helis), and not in a cutscene (`CCutsceneMgr::ms_running`, found through its use in `CTimeCycle::CalcColoursForPoint`). The speed `|m_vecMoveSpeed|` picks a row of the original's table (`0x8D5190`).
   - Nitro: a car with `bNosInst` (`handlingFlags +0x5C0 & 0x80000`) whose `m_fTireTemperature` (`+0xC0C`) is below 0 uses `clamp(2 · (moveSpeed · forward) · (m_GasPedal (+0x710) + 1), 0, 1)` when the dot product is above 0.2, even in cutscenes. The offsets come from DE's `CAutomobile::NitrousControl` (`0x14138F290`).
@@ -104,19 +125,23 @@ Every look setting can be changed live, and **Save to ini** writes the values ba
   - The simulation runs at a fixed 30 Hz, as the original's per-frame steps assume. The drop mask is drawn procedurally (skygfx reads `dropmask` from `neo\neo.txd`, which isn't shipped here). Blood drops (off by default in skygfx) are not ported. `[WaterDrops] MaxDrops` (0–2000, default skygfx's 2000; menu slider) caps how many drops are on the lens at once.
 - All post effects (water drops, SpeedFX, radiosity, grain, in the original's order) are drawn before the HUD at the `HudBind` backbuffer bind, and follow the look toggle.
 - **DX12** (`-dx12`). The menu and the post effects draw through a D3D11On12 device created on DE's direct command queue (taken from DE's `CreateSwapChain` / `CreateSwapChainForHwnd` call, which DXGI gives the queue as its device). Each swap-chain buffer is wrapped as a D3D11 texture, so the same D3D11 code draws on both renderers; the wrapped buffers and their views are released before `ResizeBuffers`. To keep the HUD sharp, DE's backbuffer binds are counted in `ID3D12GraphicsCommandList::OMSetRenderTargets` (backbuffer RTV handles noted in `ID3D12Device::CreateRenderTargetView`); at bind `HudBind` the finished scene is copied into a texture inside DE's own command list. At Present the effects run on that copy, and the result replaces every pixel the HUD left unchanged, so HUD pixels keep DE's final frame.
-- **Street lights.** DE's lamps are `AStreetLightMapActor` actors with spot and point light components (1100+ in Los Santos), switched on at night by DE. DE's lamp update (`0x140C206C0`, a virtual of the lamp actor) gives each light `MaxDrawDistance` (`ULightComponent +0x22C`) = `gta.streetlightdistance` (int, cm; registered default 16000) and its engine's per-light shadow distance (`+0x324`) = `gta.streetlight.shadowdistance` (0 = the Streetlights option's `Spot/PointLightShadowDistance`). In game both read 4 cm, so UE culls every lamp light (only the emissive lamp heads glow) and none casts a shadow. SkyGfxDE finds both cvars' storage from their `RegisterConsoleVariableRef` call (`lea r8, var` before `lea rdx, L"name"`) and sets them every frame to `DrawDistance` (default 150 m) and `ShadowDistance` (default 50 m); DE applies them to each lamp as it streams in. An earlier version wrote the light components directly; it crashed the game with heap corruption shortly after loading, so nothing but the two cvars is touched now. A jevify pass over the 31 game functions under the lamp actor's natives (`SetLights`, `SetLowQualityLights`, `SetLightVisibility`, …) mapped the lamp code; the cvars lead to the lamp update.
-  - The park bollards (`BP_Streetlight_BollardPark_C`) never cast shadows: they are lamp actors with `AStreetLightMapActor::bNeverCastShadows` (`+0x300` bit 7), and DE's lamp update (`0x140C206C0`) sets each lamp light's `CastShadows` to `!bNeverCastShadows && the Streetlights option's shadow switch` every time it runs, so a plain `SetCastShadows` from outside is undone at the next update. Their blueprint also has `CastDynamicShadows` (`+0x214` bit 3) off, which a movable light needs to cast any shadow and which has no setter (found by dumping the bollard lights' state in game). With `[StreetLights] OtherLightShadows=1` (default) the actor's bit is cleared, `CastDynamicShadows` is set, and UE's own `ULightComponentBase::SetCastShadows` (false, then true, to force the re-register) is called through `ProcessEvent`, so later lamp updates keep them on, within `ShadowDistance`. `BollardBrightness` (default 0.5) scales their light through `ULightComponent::SetIntensity`. Both run in `AGTATimeOfDay::Tick`, on UE's game thread (`CTimeCycle::Update`, where the other look hooks run, is not), and are put back with the look off. The game thread is the one owning the game window (`OnGameThread`; it used to look for a window class DE doesn't use, so it never matched: that also kept `[Characters] Matte` from ever running).
-  - **Every world light** (`OtherLightShadows=1`): the same is done for every point/spot light whose owner isn't a vehicle, pickup, explosion or other moving/effect actor (16 owner classes, sorted out of DE's 158 light-owning blueprints). A shadowed light sits inside its own fixture (e.g. SF Chinatown's `chinalamp_sf` lantern), which then blacked it out within the shadow distance while far lamps still lit the street; so the owner's small meshes (bounds radius < 6 m) stop casting shadows through `UPrimitiveComponent::SetCastShadow`. Those fixtures then cast no sun shadow either.
-  - **SF park globe lamps** (`BP_Streetlamp1/2_C`) light the path again: their point light is 8500 with a 9.5 m radius (a lamppost's spot is 80000), so even unshadowed they left no pool of light. `GlobeLampBrightness` (default 8) multiplies it through `SetIntensity`.
-- **Distant lamp coronas.** After Project2DFX's SALodLights: `SALodLights.dat` (shipped next to the `.asi`) lists corona offsets per lamp model. Every IPL instance of those models that `CFileLoader::LoadObjectInstance` builds while the level loads becomes a lamp. At night (p2dfx's 20:00–07:00 fade), lamps past the range of the model's own corona and inside the far clip get a corona in DE's `UGTACoronaComponent` (`AGTAWorldSettings::GetCoronaComponent`, the one DE's lights use, through `ProcessEvent` `AddCorona` / `UpdateCorona` / `RemoveCorona`), so terrain and buildings hide them. `[Coronas]` Size, Intensity, FarClip (0 = timecyc far clip).
-- **Characters.** Makes peds matte. Before v1.2.3 this never ran (the game-thread check looked for a window class DE doesn't use), which is why earlier in-game tests showed no change. DE's character materials come from three glossy master materials:
-  - skin, `M_Character_VGD`: `GlobalRoughness` 0.5, with a subsurface profile;
-  - clothes, `M_Character_Clothes_VGD`: `Roughness` 0.9 × texture, `Specular` 0.5;
-  - hair, `M_Character_Hair_VGD`: `Roughness` 0.3, `Specular` 1.0.
-  
-  Every loaded instance of those masters has its roughness pulled towards 1 and its specular multiplied by `1 − Matte`. Instances are rescanned every second as peds stream in. The change undoes itself when the look is toggled off. The redesigned shapes and textures of the DE character models themselves (the "cartoony" part) can only be changed by replacement models in a pak mod.
 
 Keep the in-game *Classic Atmosphere* option **off**. It destroys the volumetric clouds and swaps in Grove Street's override curves; with it on, only the filter, grade and shadows apply.
+
+## Unreal features
+
+Unreal features that DE ships but doesn't use (`src/modern.cpp`). Each one is independent and off by default. Turning one off restores DE's own value for it.
+
+- **SSGI** (`SSGI`, `SSGIQuality`): `r.SSGI.Enable 1` and `r.SSGI.Quality` = `SSGIQuality` (1–4).
+- **GTAO** (`AmbientOcclusion`): `r.AmbientOcclusion.Method 1`, plus the post-process volume AO fields.
+- **SSR** (`Reflections`, `ReflectionQuality`): `r.SSR.Quality` = `ReflectionQuality` (1–4) while on, and on the post-process volumes SSR intensity 100 and `ScreenSpaceReflectionQuality` 25 × level.
+- **Volumetric fog** (`VolumetricFog`): `r.VolumetricFog 1`, an `FAutoConsoleVariableRef` int found from its registration.
+- **Lens flare** (`LensFlare`): × DE's lens flare (1 = DE's, 0 = off).
+- **Sun strength** (`SunStrength`, default 1): multiplies `AGTATimeOfDay::SunBaseIntensity` (+0x37BC). DE copies this value once from the sun light (init block of `0xBBAC30`). Its sun writer (`0xBB8830`, called from the colour update every frame) then sets the sun light's `Intensity` (+0x20C) to the sun visibility (from `LiveColors.SunshineAmount`) × this base. The base is re-captured if DE rewrites it. When the sun is above ×1, the menu recommends turning the PS2 filter off and has a button that does it in one click.
+
+Override bits and offsets come from `FPostProcessSettings` in the SDK dump. The live cvar values are in the **Info** tab.
+
+`test/e2e_modern.py` launches the game twice (all off, then all on with SunStrength 1.5) at Grove Street, at 13:00 and 17:30. It checks that every cvar is found and that the game survives, and it reports the mean luminance of each shot.
 
 ## Weather regions
 
@@ -145,12 +170,13 @@ Every address is found at runtime: functions by unique byte signatures, globals 
 
 | File | Contents |
 |---|---|
-| `src/core.cpp` | Config/ini, hotkeys, log, signature scanning, timecyc loader, look hooks (colour filter, colours, fog, shadows, bloom), Look tab |
+| `src/core.cpp` | Config/ini, hotkeys, log, signature scanning, timecyc loader, look hooks (colour filter, colours, fog, shadows, bloom), settings tabs |
 | `src/postfx.cpp` | D3D11 post effects: water drops, SpeedFX, radiosity, grain |
 | `src/tools.cpp` | Weather/time/freecam/noclip hooks, World tab, game state for the post effects (speed, rain, camera, splash hooks) |
-| `src/peds.cpp` | Matte characters (material scalar overrides through `ProcessEvent`) |
+| `src/uobject.cpp` | FName/UObject helpers |
 | `src/coronas.cpp` | Distant lamp coronas (Project2DFX `SALodLights.dat`) |
 | `src/streetlights.cpp` | Street lamp light and shadow distances (DE's `gta.streetlight*` cvars) |
+| `src/modern.cpp` | Unreal features (SSGI, GTAO, SSR, volumetric fog, lens flare) and their panel |
 | `data/` | `SALodLights.dat` from Project2DFX and the PS2 `timecyc_ps2.dat` (copied to `bin\` by `build.bat`) |
 | `src/overlay.cpp` | DXGI Present/ResizeBuffers/CreateSwapChain and D3D11 OMSetRenderTargets hooks, D3D11On12 on DX12, ImGui, input capture |
 | `src/dllmain.cpp` | Entry point; installs the overlay from a worker thread |

@@ -292,11 +292,21 @@ static void DrawMenu() {
     ImGui::SetNextWindowSize(ImVec2(560, 680), ImGuiCond_FirstUseEver);
     bool open = true;
     if (ImGui::Begin("SkyGfxDE", &open)) {
-        ImGui::TextDisabled("menu %s | look %s | reload %s | freecam %s | noclip %s", g_cfg.keyMenu.text, g_cfg.keyToggle.text,
-                            g_cfg.keyReload.text, g_cfg.keyFreecam.text, g_cfg.keyNoclip.text);
+        // Header: what you need on every tab. Keys are listed in Info.
+        ImGui::Checkbox("Effect on", &g_active);
+        ImGui::SameLine(); ImGui::TextDisabled("(%s)", g_cfg.keyToggle.text);
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize("Save  Reload").x - ImGui::GetStyle().FramePadding.x * 4);
+        if (ImGui::Button("Save")) SaveIni();
+        ImGui::SameLine();
+        if (ImGui::Button("Reload")) { ReadIni(); ApplyTimecycFile(); }
+        if (g_look.classic) ImGui::TextColored(ImVec4(1, 0.6f, 0.2f, 1), "In-game Classic Atmosphere is ON: only filter, grade and shadows apply");
         if (ImGui::BeginTabBar("tabs")) {
+            if (ImGui::BeginTabItem("Colour")) { ColourTab(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Sky & fog")) { SkyTab(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Lighting")) { LightingTab(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Effects")) { EffectsTab(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("World")) { ToolsPanel(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Look")) { LookPanel(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Info")) { InfoTab(); ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
     }

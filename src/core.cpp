@@ -130,7 +130,6 @@ void ReadIni() {
     c.waterDrops          = GetPrivateProfileIntA("WaterDrops", "Enabled", 1, ini) != 0;
     c.maxDrops            = (int)Clamp((float)GetPrivateProfileIntA("WaterDrops", "MaxDrops", 2000, ini), 0.0f, 2000.0f);
     c.lodDistance         = Clamp(IniFloat("World", "LodDistance", 1.8f), 0.1f, 10.0f);
-    c.pedMatte            = Clamp(IniFloat("Characters", "Matte", 0.6f), 0.0f, 1.0f);
     c.coronas             = GetPrivateProfileIntA("Coronas", "Enabled", 1, ini) != 0;
     c.coronaSize          = Clamp(IniFloat("Coronas", "Size", 0.5f), 0.0f, 20.0f);
     c.coronaIntensity     = Clamp(IniFloat("Coronas", "Intensity", 1.0f), 0.0f, 100.0f);
@@ -143,6 +142,14 @@ void ReadIni() {
     c.freecamSpeed        = Clamp(IniFloat("Tools", "FreecamSpeed", 20.0f), 0.1f, 1000.0f);
     c.noclipSpeed         = Clamp(IniFloat("Tools", "NoclipSpeed", 15.0f), 0.1f, 1000.0f);
     GetPrivateProfileStringA("Timecyc", "File", "timecyc_ps2.dat", c.timecycFile, MAX_PATH, ini);
+    c.modernSsgi          = GetPrivateProfileIntA("ModernLook", "SSGI", 0, ini) != 0;
+    c.modernSsgiQuality   = (int)Clamp((float)GetPrivateProfileIntA("ModernLook", "SSGIQuality", 4, ini), 1.0f, 4.0f);
+    c.modernAo            = GetPrivateProfileIntA("ModernLook", "AmbientOcclusion", 0, ini) != 0;
+    c.modernSsr           = GetPrivateProfileIntA("ModernLook", "Reflections", 0, ini) != 0;
+    c.modernSsrQuality    = (int)Clamp((float)GetPrivateProfileIntA("ModernLook", "ReflectionQuality", 4, ini), 1.0f, 4.0f);
+    c.modernVolFog        = GetPrivateProfileIntA("ModernLook", "VolumetricFog", 0, ini) != 0;
+    c.modernLensFlare     = Clamp(IniFloat("ModernLook", "LensFlare", 1.0f), 0.0f, 10.0f);
+    c.modernSun           = Clamp(IniFloat("ModernLook", "SunStrength", 1.0f), 0.0f, 10.0f);
 }
 
 static void PutFloat(const char* sec, const char* key, float v) {
@@ -153,7 +160,8 @@ static void PutFloat(const char* sec, const char* key, float v) {
 
 // Writes the tunable values back (comments in the file are kept by the Windows ini API).
 bool SaveIni() {
-    const Config& c = g_cfg;
+    Config c = g_cfg;
+
     WritePrivateProfileStringA("ColourFilter", "PS2Filter", c.filter ? "1" : "0", g_iniPath);
     PutFloat("ColourFilter", "Strength", c.filterStrength);
     PutFloat("ColourFilter", "GameTimecycStrength", c.gameTimecycStrength);
@@ -188,7 +196,6 @@ bool SaveIni() {
     WritePrivateProfileStringA("WaterDrops", "Enabled", c.waterDrops ? "1" : "0", g_iniPath);
     { char md[8]; snprintf(md, sizeof(md), "%d", c.maxDrops); WritePrivateProfileStringA("WaterDrops", "MaxDrops", md, g_iniPath); }
     PutFloat("World", "LodDistance", c.lodDistance);
-    PutFloat("Characters", "Matte", c.pedMatte);
     WritePrivateProfileStringA("Coronas", "Enabled", c.coronas ? "1" : "0", g_iniPath);
     PutFloat("Coronas", "Size", c.coronaSize);
     PutFloat("Coronas", "Intensity", c.coronaIntensity);
@@ -200,6 +207,16 @@ bool SaveIni() {
     PutFloat("StreetLights", "GlobeLampBrightness", c.globeLampBrightness);
     PutFloat("Tools", "FreecamSpeed", c.freecamSpeed);
     PutFloat("Tools", "NoclipSpeed", c.noclipSpeed);
+
+    WritePrivateProfileStringA("ModernLook", "SSGI", c.modernSsgi ? "1" : "0", g_iniPath);
+    { char q[8]; snprintf(q, sizeof(q), "%d", c.modernSsgiQuality); WritePrivateProfileStringA("ModernLook", "SSGIQuality", q, g_iniPath); }
+    WritePrivateProfileStringA("ModernLook", "AmbientOcclusion", c.modernAo ? "1" : "0", g_iniPath);
+    WritePrivateProfileStringA("ModernLook", "Reflections", c.modernSsr ? "1" : "0", g_iniPath);
+    { char q[8]; snprintf(q, sizeof(q), "%d", c.modernSsrQuality); WritePrivateProfileStringA("ModernLook", "ReflectionQuality", q, g_iniPath); }
+    WritePrivateProfileStringA("ModernLook", "VolumetricFog", c.modernVolFog ? "1" : "0", g_iniPath);
+
+    PutFloat("ModernLook", "LensFlare", c.modernLensFlare);
+    PutFloat("ModernLook", "SunStrength", c.modernSun);
     const bool ok = WritePrivateProfileStringA("Timecyc", "File", c.timecycFile, g_iniPath) != 0;
     Log(1, "ini %s %s", ok ? "saved to" : "could NOT be saved to", g_iniPath);
     return ok;
@@ -301,7 +318,7 @@ int32_t** g_cloudCVar = nullptr; // r.VolumetricCloud (FindIntCVar)
 // Address of the static that holds an int console variable's TConsoleVariableData<int32>* (ShadowedValue[2]: game
 // thread, render thread), from its TAutoConsoleVariable registration: lea rdx, L"name"; call [rax+18h]; ...
 // call [rdx+58h] (AsVariableInt); lea rcx, ..; mov [rip], rax. Read it when used: it is set by a static initializer.
-static int32_t** FindIntCVar(const wchar_t* name) {
+int32_t** FindIntCVar(const wchar_t* name) {
     auto* nt = (IMAGE_NT_HEADERS64*)(g_moduleBase + ((IMAGE_DOS_HEADER*)g_moduleBase)->e_lfanew);
     auto* sec = IMAGE_FIRST_SECTION(nt);
     const size_t len = (wcslen(name) + 1) * sizeof(wchar_t);
@@ -350,6 +367,9 @@ constexpr size_t OfSingleton = 0x688;   // AGTATimeOfDay* in DE's engine singlet
 constexpr size_t SkyLightIntensity = 0x66C; // float, sky light intensity (x SkylightColor alpha)
 constexpr size_t CloudyAmount = 0x26A4; // float, CWeather::CloudCoverage (CTimeCycle::Update copies it in)
 constexpr size_t VgdOverrideClass = 0x4770; // TSubclassOf<AVGDOverrideData>: DE's GTA fog StartDistance source
+// float, the sun light's base Intensity: DE copies it once from the sun light (init block of 0xBBAC30); its sun
+// writer (0xBB8830, called from the colour update every frame) sets the sun light's Intensity = visibility x this.
+constexpr size_t SunBaseIntensity = 0x37BC;
 }
 constexpr size_t UCLASS_CDO = 0x118;          // UClass::ClassDefaultObject
 constexpr size_t VGD_FogStartDistance = 0x220; // float StartDistance, then VolumetricFogExtinctionScale (sub_140B51860)
@@ -577,6 +597,7 @@ struct Volume {
     float deGain[4], deSat[4], deContrast[4]; // DE's own values (brightness/contrast options), after UpdateColorOptions
     uint8_t deOverride0;                       // DE's override bits in byte 0
     bool origBloomOverride; float origBloom;
+    uint8_t de[0x550];                         // FPostProcessSettings as DE set it (ModernVolume restores from it)
     float origBias;                            // AutoExposureBias (DE doesn't rewrite it)
 };
 static Volume g_volumes[64];
@@ -585,6 +606,7 @@ static SRWLOCK g_lock = SRWLOCK_INIT;
 static float g_gain[3] = { 1, 1, 1 };
 static float g_indirect = 1.0f;
 static float g_night = 0.0f; // 1 - the original's day/night balance, from the time-of-day colour hook
+
 
 uint8_t* ObjectItem(int32_t index) {
     if (!g_objects || index < 0) return nullptr;
@@ -619,8 +641,8 @@ static void WriteVolume(Volume& v) {
     const bool on = g_active;
     const bool filterOn = on && g_cfg.filter;
     Scale4((float*)(s + PP::ColorGain), v.deGain, 1.0f, filterOn ? g_gain : nullptr);
-    Scale4((float*)(s + PP::ColorSaturation), v.deSat, on ? g_cfg.saturation : 1.0f);
-    Scale4((float*)(s + PP::ColorContrast), v.deContrast, on ? g_cfg.contrast : 1.0f);
+    Scale4((float*)(s + PP::ColorSaturation), v.deSat, !on ? 1.0f : g_cfg.saturation);
+    Scale4((float*)(s + PP::ColorContrast), v.deContrast, !on ? 1.0f : g_cfg.contrast);
     const uint8_t bits = on ? (uint8_t)(v.deOverride0 | PP::GradeBits) : v.deOverride0;
     s[PP::OverrideByte0] = (uint8_t)((s[PP::OverrideByte0] & ~PP::GradeBits) | (bits & PP::GradeBits));
 
@@ -632,14 +654,16 @@ static void WriteVolume(Volume& v) {
         *(float*)(s + PP::ExposureBias) = v.origBias + (on ? g_cfg.nightExposure * g_night : 0.0f);
     // The PS2 had no bloom: radiosity is its glow, so DE's bloom is scaled by DEBloom while radiosity is on.
     float* bloom = (float*)(s + PP::BloomIntensity);
+    const float deBloom = v.origBloomOverride ? v.origBloom : 0.675f;
     if (on && g_cfg.radiosity) {
         s[PP::OverrideByte6] |= PP::BloomBit;
-        *bloom = (v.origBloomOverride ? v.origBloom : 0.675f) * g_cfg.deBloom;
+        *bloom = deBloom * g_cfg.deBloom;
     } else {
         if (v.origBloomOverride) s[PP::OverrideByte6] |= PP::BloomBit;
         else s[PP::OverrideByte6] &= (uint8_t)~PP::BloomBit;
         *bloom = v.origBloom;
     }
+    ModernVolume(s, v.de, on);
 }
 
 static Volume* TrackVolume(uint8_t* obj) {
@@ -654,6 +678,8 @@ static Volume* TrackVolume(uint8_t* obj) {
     v.origBloomOverride = (s[PP::OverrideByte6] & PP::BloomBit) != 0;
     v.origBloom = *(const float*)(s + PP::BloomIntensity);
     v.origBias = *(const float*)(s + PP::ExposureBias);
+    memcpy(v.de, s, sizeof(v.de));
+
     const bool filmBits[5] = { (s[4] & 0x80) != 0, (s[5] & 1) != 0, (s[5] & 2) != 0, (s[5] & 4) != 0, (s[5] & 8) != 0 };
     if (!obj[PP::IsInterior])
         for (int i = 0; i < 5; ++i) if (filmBits[i]) g_film[i] = ((const float*)(s + 0x184))[i]; // FilmSlope..FilmWhiteClip
@@ -801,7 +827,8 @@ static uintptr_t Hooked_FogUpdateColors(void* fogActor, float dt) {
         const bool gtaOn = gtaFog && gtaRangeCm > 0.0f;
         g_look.farClip = farClip;
         const float wantMain = gtaOn ? -logf(1.0f - g_cfg.fogOpacity) * 1000.0f / (0.480453f * gtaRangeCm)
-                             : modernOn ? *density * g_cfg.haze : classicOn ? fminf(*density, cap) : *density;
+                             : modernOn ? *density * g_cfg.haze
+                             : classicOn ? fminf(*density, cap) : *density;
         const float wantSecond = gtaOn || modernOn ? *second * g_cfg.groundHaze : *second;
         g_look.fogDensityApplied = wantMain;
         // GTA fog colour: DE's GTA path copies one static classic colour, which glows at night. Use the time-of-day
@@ -884,6 +911,7 @@ static const float* CalibrateWeather(uint8_t* tod, int w) {
         set, c.k[0], c.k[1], c.k[2], c.k[3]);
     return c.k;
 }
+
 
 static void ApplyColours(uint8_t* tod, const uint8_t* cc, float hours) {
     float amb[3], top[3], bottom[3], sun[3], clouds[3];
@@ -1007,7 +1035,16 @@ static void PerFrame() {
             deCloud = -1;
         }
     }
+    ModernFrame(g_active);
     uint8_t* tod = *g_singleton ? *(uint8_t**)(*g_singleton + TOD::OfSingleton) : nullptr;
+    // Sun strength: scales DE's base sun intensity (re-captured if DE rewrites it, e.g. a new time-of-day actor).
+    if (tod) {
+        static uint8_t* s_tod = nullptr;
+        static float s_base = 0.0f, s_written = -1.0f;
+        float* base = (float*)(tod + TOD::SunBaseIntensity);
+        if (tod != s_tod || *base != s_written) { s_tod = tod; s_base = *base; }
+        s_written = *base = s_base * (g_active ? g_cfg.modernSun : 1.0f);
+    }
     // GTA fog: fog starts at half the scaled timecyc far clip. The original's fog started near 0 m (timecyc fog start
     // median 10 m), too thick for DE's full-distance world. DE copies StartDistance every frame from its fog override
     // data (class default object + 0x220), so the value is written at that source; restored when GTA fog is off.
@@ -1084,7 +1121,6 @@ static void GuardedFrame(void (*fn)(), const char* what) {
 static uintptr_t Hooked_TimeCycleUpdate(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d) {
     const uintptr_t r = o_TimeCycleUpdate(a, b, c, d);
     GuardedFrame(PerFrame, "look");
-    GuardedFrame(PedsFrame, "characters");
     GuardedFrame(CoronasFrame, "coronas");
     GuardedFrame(StreetLightsFrame, "street lights");
     return r;
@@ -1149,6 +1185,7 @@ bool Install() {
     if (!g_volFogInClassic) Log(1, "gta.ShowVolumeFogInClassic not found: GTA fog turns volumetric fog off");
     g_cloudCVar = FindIntCVar(L"r.VolumetricCloud");
     Log(1, g_cloudCVar ? "r.VolumetricCloud found" : "r.VolumetricCloud NOT found: volumetric clouds stay with the Classic sky");
+    ModernInstall();
     // CColourSet::CColourSet tail: mov edi, [base + rva weather->curve set table + rdi*4] (ctor+0x3EF), then
     // call the sky curve evaluator (ctor+0x41D). Missing: brightness uses the EXTRASUNNY_VEGAS calibration for all.
     static const uint8_t remapLoad[] = { 0x41, 0x8B, 0xBC, 0xBF }, callRel[] = { 0xE8 };
@@ -1190,7 +1227,7 @@ bool Install() {
     Log(movingFog ? 2 : 1, "moving fog %p%s", movingFog, movingFog ? "" : ": not found, no SF moving fog");
     Log(rainbow ? 2 : 1, "rainbow %p%s", rainbow, rainbow ? "" : ": not found, no rainbow");
     if (!InstallTools()) Log(1, "debug tools unavailable (see above); the look still works");
-    InstallPeds();
+    InstallUObject();
     InstallCoronas();
     InstallStreetLights();
     if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {
@@ -1203,7 +1240,7 @@ bool Install() {
 }
 
 // ----------------------------------------------------------------------
-// Look tab (render thread; values are plain floats read by the game thread each frame)
+// Settings tabs (render thread; values are plain floats read by the game thread each frame)
 // ----------------------------------------------------------------------
 static void Swatch(const char* label, const float srgb[3]) {
     ImGui::ColorButton(label, ImVec4(srgb[0], srgb[1], srgb[2], 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(18, 18));
@@ -1253,54 +1290,104 @@ bool SliderBoxInt(const char* label, int* v, int lo, int hi, int hardLo, int har
     return changed;
 }
 
-void LookPanel() {
-    ImGui::Checkbox("Effect on", &g_active);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(%s)", g_cfg.keyToggle.text);
-    if (g_look.classic) ImGui::TextColored(ImVec4(1, 0.6f, 0.2f, 1), "Classic Atmosphere is ON: only filter/grade/shadows apply");
+void ColourTab() {
+    ImGui::SeparatorText("PS2 colour filter");
+    ImGui::Checkbox("PS2 filter", &g_cfg.filter);
+    ImGui::BeginDisabled(!g_cfg.filter);
+    if (g_customTimecyc) {
+        SliderBox("Strength", &g_cfg.filterStrength, 0.0f, 2.0f, 0.0f, 10.0f);
+        SliderBox("Keep brightness", &g_cfg.keepBrightness, 0.0f, 1.0f, 0.0f, 1.0f);
+    } else {
+        SliderBox("Strength (game timecyc)", &g_cfg.gameTimecycStrength, 0.0f, 2.0f, 0.0f, 10.0f);
+    }
+    ImGui::EndDisabled();
+    ImGui::SeparatorText("Grade");
+    SliderBox("Saturation", &g_cfg.saturation, 0.0f, 2.0f, 0.0f, 10.0f);
+    SliderBox("Contrast", &g_cfg.contrast, 0.5f, 2.0f, 0.1f, 10.0f);
+    ImGui::SeparatorText("Exposure & shadows");
+    SliderBox("Night exposure (EV)", &g_cfg.nightExposure, -4.0f, 4.0f, -10.0f, 10.0f, "%.2f");
+    SliderBox("Shadow darkness", &g_cfg.shadowDarkness, 0.0f, 0.9f, 0.0f, 1.0f);
+}
 
-    if (ImGui::CollapsingHeader("PS2 colour filter", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Checkbox("PS2 filter", &g_cfg.filter);
-        if (g_customTimecyc) {
-            SliderBox("Strength", &g_cfg.filterStrength, 0.0f, 2.0f, 0.0f, 10.0f);
-            SliderBox("Keep brightness", &g_cfg.keepBrightness, 0.0f, 1.0f, 0.0f, 1.0f);
-        } else {
-            SliderBox("Strength (game timecyc)", &g_cfg.gameTimecycStrength, 0.0f, 2.0f, 0.0f, 10.0f);
-        }
-        ImGui::TextDisabled("display gain -> DE ColorGain through the filmic curve at mid grey");
+void SkyTab() {
+    ImGui::SeparatorText("Mode");
+    const int mode = g_cfg.classicSky ? 0 : g_cfg.gtaFog ? 1 : 2;
+    if (ImGui::RadioButton("Classic sky", mode == 0)) g_cfg.classicSky = true;
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Modern + GTA fog", mode == 1)) { g_cfg.classicSky = false; g_cfg.gtaFog = true; }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Modern", mode == 2)) { g_cfg.classicSky = false; g_cfg.gtaFog = false; }
+    if (mode == 0) {
+        ImGui::TextDisabled("Classic Atmosphere's sky and fog, modern lighting kept");
+    } else if (mode == 1) {
+        SliderBox("Fog distance", &g_cfg.fogDistance, 0.5f, 5.0f, 0.5f, 5.0f, "x%.2f");
+        SliderBox("Fog at far clip", &g_cfg.fogOpacity, 0.05f, 0.95f, 0.05f, 0.95f);
+        SliderBox("Ground haze", &g_cfg.groundHaze, 0.0f, 2.0f, 0.0f, 20.0f);
+    } else {
+        SliderBox("Haze", &g_cfg.haze, 0.0f, 2.0f, 0.0f, 20.0f);
+        SliderBox("Ground haze", &g_cfg.groundHaze, 0.0f, 2.0f, 0.0f, 20.0f);
+    }
+    ImGui::SeparatorText("Timecyc colours");
+    SliderBox("Sky", &g_cfg.skyStrength, 0.0f, 1.0f, 0.0f, 4.0f);
+    SliderBox("Fog colour", &g_cfg.fogStrength, 0.0f, 1.0f, 0.0f, 4.0f);
+    SliderBox("Ambient", &g_cfg.ambientStrength, 0.0f, 1.0f, 0.0f, 4.0f);
+    SliderBox("Sun", &g_cfg.sunTint, 0.0f, 1.0f, 0.0f, 4.0f);
+    SliderBox("Clouds", &g_cfg.cloudTint, 0.0f, 1.0f, 0.0f, 4.0f);
+    SliderBox("Brightness", &g_cfg.brightness, 0.0f, 2.0f, 0.0f, 4.0f);
+}
+
+void LightingTab() {
+    ImGui::SeparatorText("Sun & Unreal features");
+    ModernPanel();
+    ImGui::SeparatorText("Street lights");
+    StreetLightsPanel();
+    ImGui::SeparatorText("Lamp coronas");
+    CoronasPanel();
+}
+
+void EffectsTab() {
+    ImGui::SeparatorText("Radiosity (PS2 glow)");
+    ImGui::Checkbox("On##radiosity", &g_cfg.radiosity);
+    ImGui::BeginDisabled(!g_cfg.radiosity);
+    SliderBoxInt("Intensity", &g_cfg.radiosityIntensity, 0, 255, 0, 255);
+    SliderBox("Offset (PS2 px)", &g_cfg.radiosityOffset, 0.0f, 12.0f, 0.0f, 64.0f, "%.1f");
+    SliderBox("DE bloom", &g_cfg.deBloom, 0.0f, 1.0f, 0.0f, 4.0f);
+    ImGui::EndDisabled();
+    ImGui::SeparatorText("Rain grain");
+    ImGui::Checkbox("On##grain", &g_cfg.grain);
+    ImGui::BeginDisabled(!g_cfg.grain);
+    SliderBox("Strength", &g_cfg.grainStrength, 0.0f, 2.0f, 0.0f, 10.0f);
+    ImGui::EndDisabled();
+    ImGui::SeparatorText("Water drops");
+    ImGui::Checkbox("On##drops", &g_cfg.waterDrops);
+    ImGui::BeginDisabled(!g_cfg.waterDrops);
+    SliderBoxInt("Max drops", &g_cfg.maxDrops, 0, 2000, 0, 2000);
+    ImGui::EndDisabled();
+    ImGui::SeparatorText("SpeedFX (speed blur)");
+    ImGui::Checkbox("On##speedfx", &g_cfg.speedFx);
+    ImGui::BeginDisabled(!g_cfg.speedFx);
+    ImGui::SameLine();
+    ImGui::Checkbox("Test mode", &g_cfg.speedFxTestMode);
+    SliderBoxInt("Before backbuffer bind", &g_cfg.speedFxHudBind, 0, 6, 0, 16);
+    ImGui::EndDisabled();
+}
+
+void InfoTab() {
+    if (ImGui::CollapsingHeader("Keys")) {
+        ImGui::Text("menu %s   toggle %s   reload %s   freecam %s   noclip %s", g_cfg.keyMenu.text, g_cfg.keyToggle.text,
+                    g_cfg.keyReload.text, g_cfg.keyFreecam.text, g_cfg.keyNoclip.text);
+    }
+    if (ImGui::CollapsingHeader("Colour filter")) {
         ImGui::Text("gain  %.3f %.3f %.3f", g_look.gain[0], g_look.gain[1], g_look.gain[2]);
+        ImGui::TextDisabled("display gain -> DE ColorGain through the filmic curve at mid grey");
     }
-    if (ImGui::CollapsingHeader("Grade", ImGuiTreeNodeFlags_DefaultOpen)) {
-        SliderBox("Saturation", &g_cfg.saturation, 0.0f, 2.0f, 0.0f, 10.0f);
-        SliderBox("Contrast", &g_cfg.contrast, 0.5f, 2.0f, 0.1f, 10.0f);
+    if (ImGui::CollapsingHeader("Fog")) {
+        if (g_cfg.classicSky) ImGui::Text("fog density %.5f   ground layer %.4f (DE's values)", g_look.fogDensityDE, g_look.secondFogDE);
+        else if (g_cfg.gtaFog) ImGui::Text("clear to %.0f m, %.0f%% at %.0f m   density %.5f", g_look.gtaFogStart, g_cfg.fogOpacity * 100.0f,
+                                           g_look.gtaFogFar, g_look.fogDensityApplied);
+        else ImGui::Text("fog density DE %.5f -> %.5f   ground layer DE %.4f", g_look.fogDensityDE, g_look.fogDensityApplied, g_look.secondFogDE);
     }
-    if (ImGui::CollapsingHeader("Atmosphere", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Checkbox("Classic sky and fog (Classic Atmosphere's, modern lighting kept)", &g_cfg.classicSky);
-        if (g_cfg.classicSky) {
-            ImGui::Text("fog density %.5f   ground layer %.4f (DE's values)", g_look.fogDensityDE, g_look.secondFogDE);
-        } else {
-            ImGui::Checkbox("GTA fog (timecyc far clip)", &g_cfg.gtaFog);
-            if (g_cfg.gtaFog) {
-                SliderBox("Fog distance", &g_cfg.fogDistance, 0.5f, 5.0f, 0.5f, 5.0f, "x%.2f");
-                SliderBox("Fog at far clip", &g_cfg.fogOpacity, 0.05f, 0.95f, 0.05f, 0.95f);
-                SliderBox("Ground haze", &g_cfg.groundHaze, 0.0f, 2.0f, 0.0f, 20.0f);
-                ImGui::Text("clear to %.0f m, %.0f%% at %.0f m   density %.5f", g_look.gtaFogStart, g_cfg.fogOpacity * 100.0f,
-                            g_look.gtaFogFar, g_look.fogDensityApplied);
-            } else {
-                SliderBox("Haze (height fog)", &g_cfg.haze, 0.0f, 2.0f, 0.0f, 20.0f);
-                SliderBox("Ground haze", &g_cfg.groundHaze, 0.0f, 2.0f, 0.0f, 20.0f);
-                ImGui::Text("fog density DE %.5f -> %.5f   ground layer DE %.4f", g_look.fogDensityDE, g_look.fogDensityApplied, g_look.secondFogDE);
-            }
-        }
-    }
-    if (ImGui::CollapsingHeader("Timecyc colours", ImGuiTreeNodeFlags_DefaultOpen)) {
-        SliderBox("Sky", &g_cfg.skyStrength, 0.0f, 1.0f, 0.0f, 4.0f);
-        SliderBox("Fog colour", &g_cfg.fogStrength, 0.0f, 1.0f, 0.0f, 4.0f);
-        SliderBox("Ambient", &g_cfg.ambientStrength, 0.0f, 1.0f, 0.0f, 4.0f);
-        SliderBox("Sun", &g_cfg.sunTint, 0.0f, 1.0f, 0.0f, 4.0f);
-        SliderBox("Clouds", &g_cfg.cloudTint, 0.0f, 1.0f, 0.0f, 4.0f);
-        SliderBox("Brightness (timecyc sky, original sun hours)", &g_cfg.brightness, 0.0f, 2.0f, 0.0f, 4.0f);
-        SliderBox("Night exposure (EV; + = brighter nights)", &g_cfg.nightExposure, -4.0f, 4.0f, -10.0f, 10.0f, "%.2f");
+    if (ImGui::CollapsingHeader("Timecyc")) {
         if (g_curColours) {
             const uint8_t* cc = g_curColours;
             float top[3], bottom[3], sun[3], clouds[3];
@@ -1328,37 +1415,19 @@ void LookPanel() {
                 LinearSwatch("clouds", (const float*)(live + SCS::VolumetricCloud));
             }
         }
+        ImGui::Text("timecyc: %s", g_customTimecyc ? g_cfg.timecycFile : "game's own");
     }
-    if (ImGui::CollapsingHeader("Shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
-        SliderBox("Darkness", &g_cfg.shadowDarkness, 0.0f, 0.9f, 0.0f, 1.0f);
+    if (ImGui::CollapsingHeader("Shadows")) {
         ImGui::Text("shadow fill (sky light, uplighting) x%.2f  (%d post-process volumes)", g_look.indirect, g_look.volumes);
     }
-    if (ImGui::CollapsingHeader("Characters", ImGuiTreeNodeFlags_DefaultOpen)) PedsPanel();
-    if (ImGui::CollapsingHeader("Lamp coronas", ImGuiTreeNodeFlags_DefaultOpen)) CoronasPanel();
-    if (ImGui::CollapsingHeader("Street lights", ImGuiTreeNodeFlags_DefaultOpen)) StreetLightsPanel();
-    if (ImGui::CollapsingHeader("Post effects", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Checkbox("SpeedFX (original speed blur)", &g_cfg.speedFx);
-        ImGui::SameLine();
-        ImGui::Checkbox("Test mode", &g_cfg.speedFxTestMode);
-        ImGui::Checkbox("Radiosity (PS2 glow)", &g_cfg.radiosity);
-        ImGui::SameLine();
-        ImGui::Checkbox("Grain (rain)", &g_cfg.grain);
-        ImGui::SameLine();
-        ImGui::Checkbox("Water drops", &g_cfg.waterDrops);
-        SliderBoxInt("Max water drops", &g_cfg.maxDrops, 0, 2000, 0, 2000);
-        SliderBoxInt("Radiosity intensity", &g_cfg.radiosityIntensity, 0, 255, 0, 255);
-        SliderBox("Radiosity offset (PS2 px)", &g_cfg.radiosityOffset, 0.0f, 12.0f, 0.0f, 64.0f, "%.1f");
-        SliderBox("Grain strength", &g_cfg.grainStrength, 0.0f, 2.0f, 0.0f, 10.0f);
-        SliderBox("DE bloom (with radiosity)", &g_cfg.deBloom, 0.0f, 1.0f, 0.0f, 4.0f);
+    if (ImGui::CollapsingHeader("Unreal features")) ModernInfo();
+    if (ImGui::CollapsingHeader("Lights")) {
+        StreetLightsInfo();
+        CoronasInfo();
+    }
+    if (ImGui::CollapsingHeader("Post effects")) {
         ImGui::Text("highlight limit %d, rain %.2f, grain mask %d", g_curColours ? *(const int32_t*)(g_curColours + 0x9C) : -1,
                     g_fx.rain, g_fx.grain);
-        SliderBoxInt("Before backbuffer bind", &g_cfg.speedFxHudBind, 0, 6, 0, 16);
         ImGui::TextDisabled("row %d, looking %d (0 = at Present, HUD blurred)", g_speedFxRow & 0xFF, g_speedFxRow < 0 ? 0 : g_speedFxRow >> 8);
     }
-    ImGui::Separator();
-    if (ImGui::Button("Save to ini")) SaveIni();
-    ImGui::SameLine();
-    if (ImGui::Button("Reload ini")) { ReadIni(); ApplyTimecycFile(); }
-    ImGui::SameLine();
-    ImGui::TextDisabled("timecyc: %s", g_customTimecyc ? g_cfg.timecycFile : "game's own");
 }

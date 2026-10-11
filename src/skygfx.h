@@ -51,8 +51,6 @@ struct Config {
     bool  waterDrops = true;       // skygfx neo water drops on the lens (rain, water splashes)
     int   maxDrops = 2000;         // most drops on screen at once (skygfx MAXDROPS 2000)
     float lodDistance = 1.8f;      // TheCamera.m_fLODDistMultiplier x this (PC draw distance slider: 1.2 default, 1.8 max)
-    // characters: roughness towards 1, specular x(1 - matte) on DE's glossy ped materials
-    float pedMatte = 0.6f;
     // distant lamp coronas (coronas.cpp, Project2DFX SALodLights)
     bool  coronas = true;
     float coronaSize = 0.5f;      // SALodLights CoronaRadiusMultiplier
@@ -64,6 +62,12 @@ struct Config {
     bool  otherLightShadows = true;   // every world light casts shadows (DE: most don't; bollards bNeverCastShadows)
     float bollardBrightness = 0.5f;   // park bollard light intensity multiplier (1 = DE's)
     float globeLampBrightness = 8.0f; // SF park globe lamp light multiplier (1 = DE's: no pool of light)
+    // Unreal features DE ships unused (modern.cpp), each independent of the others
+    bool  modernSsgi = false, modernAo = false, modernSsr = false, modernVolFog = false;
+    int   modernSsgiQuality = 4;   // r.SSGI.Quality while SSGI is on (1..4)
+    int   modernSsrQuality = 4;    // r.SSR.Quality while SSR is on (1..4); post-process SSR quality = 25 x this
+    float modernLensFlare = 1.0f;   // x DE's lens flare intensity (1 = DE's)
+    float modernSun = 1.0f;         // x DE's sun light intensity (1 = DE's)
     // timecyc
     char  timecycFile[MAX_PATH] = "timecyc_ps2.dat";
     // tools
@@ -114,7 +118,7 @@ uint8_t* FindUnique(const char* pattern);
 uint8_t* RipAt(uint8_t* insn, const uint8_t* opcode, size_t opLen, size_t insnLen);
 bool Install();       // look hooks + tools hooks; false = unsupported build, nothing installed
 bool InstallTools();  // called by Install
-bool InstallPeds();   // called by Install
+bool InstallUObject(); // called by Install: FName/UObject helpers (uobject.cpp)
 bool InstallCoronas(); // called by Install, before MH_EnableHook
 bool InstallStreetLights(); // called by Install
 
@@ -128,16 +132,30 @@ extern uint8_t* g_classicFlag;
 extern uint8_t* g_objects;
 extern uint8_t* g_namePool;       // FNamePool
 uint8_t* ObjectItem(int32_t index); // GObjects slot (FUObjectItem) or nullptr
-void PedsFrame();                  // game thread, from the look hook
-void PedsPanel();                  // render thread, Look tab
+// Settings tabs (core.cpp, render thread); overlay.cpp draws the header (Effect on, Save, Reload) and the tab bar
+void ColourTab();                  // PS2 filter, grade, night exposure, shadow darkness
+void SkyTab();                     // sky/fog mode and its settings, timecyc colours
+void LightingTab();                // sun, Unreal features, street lights, lamp coronas
+void EffectsTab();                 // radiosity, grain, water drops, SpeedFX
+void InfoTab();                    // read-only diagnostics (every live readout lives here, not in the settings tabs)
 bool LoadTimecycFile(const char* path);
 void ApplyTimecycFile();
+
+// ---------------------------------------------------------------- Unreal features (modern.cpp)
+void ModernInstall();            // find the engine cvars (Install)
+void ModernFrame(bool on);       // game thread, every frame: force each ticked cvar, restore the rest
+void ModernVolume(uint8_t* settings, const uint8_t* deSnapshot, bool on); // FPostProcessSettings: AO, SSR, lens flare
+void ModernPanel();               // render thread, Lighting tab: feature toggles + quality levels, sun strength, lens flare
+void ModernInfo();                // render thread, Info tab: live value of each forced cvar
+int32_t** FindIntCVar(const wchar_t* name); // core.cpp: TAutoConsoleVariable<int32> data static
 void CoronasFrame();               // game thread, from the look hook
-void CoronasPanel();               // render thread, Look tab
+void CoronasPanel();               // render thread, Lighting tab: settings only
+void CoronasInfo();                // render thread, Info tab: lamp/corona counts
 void StreetLightsFrame();          // game thread, from the look hook
 void OtherLightShadowsFrame();     // game thread, from the look hook
-void StreetLightsPanel();          // render thread, Look tab
-// UObject / FName helpers (peds.cpp), game thread
+void StreetLightsPanel();          // render thread, Lighting tab: settings only
+void StreetLightsInfo();           // render thread, Info tab: DE's distances, light/mesh counts
+// UObject / FName helpers (uobject.cpp), game thread
 namespace UO { constexpr size_t Flags = 0x08, Class = 0x10, Name = 0x18, Outer = 0x20, Index = 0x0C; constexpr int ProcessEventSlot = 0x43; }
 int32_t FindName(const char* s);   // comparison index of an ANSI name in FNamePool, or -1 (walks the pool)
 bool NameIs(int32_t idx, const char* s);
@@ -186,7 +204,6 @@ void ToolsToggleNoclip();
 // ---------------------------------------------------------------- overlay (overlay.cpp)
 bool InstallOverlay();                 // worker thread: finds IDXGISwapChain::Present via a dummy device
 extern volatile bool g_menuOpen;
-void LookPanel();                      // core.cpp: look settings tab
 
 // ---------------------------------------------------------------- post effects (postfx.cpp, render thread)
 struct ID3D11Device; struct ID3D11DeviceContext; struct ID3D11Texture2D; struct ID3D11RenderTargetView;

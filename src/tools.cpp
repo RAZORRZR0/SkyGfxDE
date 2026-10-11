@@ -412,72 +412,71 @@ void ToolsPanel() {
                 *g_newWeather >= 0 && *g_newWeather < kWeathers ? kWeatherNames[*g_newWeather] : "?", *g_interp, *g_forcedWeather);
     ImGui::Text("Region: %s", region >= 0 && region < 5 ? kRegionNames[region] : "?");
 
-    if (ImGui::CollapsingHeader("Weather", ImGuiTreeNodeFlags_DefaultOpen)) {
-        int mode = g_weatherMode;
-        ImGui::RadioButton("Game", &mode, WM_GAME); ImGui::SameLine();
-        ImGui::RadioButton("Force", &mode, WM_FORCE); ImGui::SameLine();
-        ImGui::RadioButton("Blend A -> B", &mode, WM_BLEND);
-        if (mode != g_weatherMode) {
-            if (mode == WM_GAME) g_releaseWeather = true;
-            g_weatherMode = mode;
-        }
-        WeatherCombo("A", g_weatherA);
-        if (g_weatherMode == WM_BLEND) {
-            WeatherCombo("B", g_weatherB);
-            float b = g_blend;
-            if (SliderBox("Blend", &b, 0.0f, 1.0f, 0.0f, 1.0f)) g_blend = b;
-        }
-        ImGui::TextDisabled("Force holds the weather; Game releases it back to the region cycle.");
+    ImGui::SeparatorText("Weather");
+    int mode = g_weatherMode;
+    ImGui::RadioButton("Game", &mode, WM_GAME); ImGui::SameLine();
+    ImGui::RadioButton("Force", &mode, WM_FORCE); ImGui::SameLine();
+    ImGui::RadioButton("Blend A -> B", &mode, WM_BLEND);
+    if (mode != g_weatherMode) {
+        if (mode == WM_GAME) g_releaseWeather = true;
+        g_weatherMode = mode;
     }
-    if (ImGui::CollapsingHeader("Time", ImGuiTreeNodeFlags_DefaultOpen)) {
-        static int h = 12, m = 0;
-        SliderBoxInt("Hour", &h, 0, 23, 0, 23);
-        SliderBoxInt("Minute", &m, 0, 59, 0, 59);
-        if (ImGui::Button("Set time")) { g_setMinute = m; g_setHour = h; }
+    WeatherCombo("A", g_weatherA);
+    if (g_weatherMode == WM_BLEND) {
+        WeatherCombo("B", g_weatherB);
+        float b = g_blend;
+        if (SliderBox("Blend", &b, 0.0f, 1.0f, 0.0f, 1.0f)) g_blend = b;
+    }
+    ImGui::TextDisabled("Force holds the weather; Game releases it back to the region cycle.");
+
+    ImGui::SeparatorText("Time");
+    static int h = 12, m = 0;
+    SliderBoxInt("Hour", &h, 0, 23, 0, 23);
+    SliderBoxInt("Minute", &m, 0, 59, 0, 59);
+    if (ImGui::Button("Set time")) { g_setMinute = m; g_setHour = h; }
+    ImGui::SameLine();
+    if (ImGui::Button("Now")) { h = *g_hours; m = *g_minutes; }
+    static const int kSlots[8] = { 0, 5, 6, 7, 12, 19, 20, 22 };
+    ImGui::TextDisabled("timecyc keyframes:");
+    for (int i = 0; i < 8; ++i) {
         ImGui::SameLine();
-        if (ImGui::Button("Now")) { h = *g_hours; m = *g_minutes; }
-        static const int kSlots[8] = { 0, 5, 6, 7, 12, 19, 20, 22 };
-        ImGui::TextDisabled("timecyc keyframes:");
-        for (int i = 0; i < 8; ++i) {
-            ImGui::SameLine();
-            char lbl[8];
-            snprintf(lbl, sizeof(lbl), "%02d", kSlots[i]);
-            if (ImGui::SmallButton(lbl)) { h = kSlots[i]; m = 0; g_setMinute = 0; g_setHour = kSlots[i]; }
-        }
-        bool freeze = g_freezeTime;
-        if (ImGui::Checkbox("Freeze time", &freeze)) g_freezeTime = freeze;
-        float speed = g_timeSpeed;
-        if (SliderBox("Time speed", &speed, 0.1f, 60.0f, 0.05f, 1000.0f, "%.1fx", ImGuiSliderFlags_Logarithmic)) g_timeSpeed = speed;
-        ImGui::SameLine();
-        if (ImGui::SmallButton("1x")) g_timeSpeed = 1.0f;
-        bool lapse = g_timelapse;
-        if (ImGui::Checkbox("Timelapse", &lapse)) g_timelapse = lapse;
-        ImGui::SameLine();
-        ImGui::TextDisabled("(a game day in %.0f s)", 1440.0f * (g_baseMsPerMinute ? g_baseMsPerMinute : 1000) / 1000.0f / g_timelapseSpeed);
-        SliderBox("Timelapse speed", &g_timelapseSpeed, 30.0f, 1000.0f, 1.0f, 1000.0f, "%.0fx", ImGuiSliderFlags_Logarithmic);
+        char lbl[8];
+        snprintf(lbl, sizeof(lbl), "%02d", kSlots[i]);
+        if (ImGui::SmallButton(lbl)) { h = kSlots[i]; m = 0; g_setMinute = 0; g_setHour = kSlots[i]; }
     }
-    if (ImGui::CollapsingHeader("Draw distance", ImGuiTreeNodeFlags_DefaultOpen)) {
-        SliderBox("LOD distance", &g_cfg.lodDistance, 0.5f, 4.0f, 0.1f, 10.0f, "x%.2f");
-        ImGui::TextDisabled(g_lodMult ? "multiplier now %.2f (DE: 70/FOV = 1.0; PC slider max 1.8)" : "not available on this build",
-                            g_lodMult ? *g_lodMult : 0.0f);
-    }
-    if (ImGui::CollapsingHeader("Camera / player", ImGuiTreeNodeFlags_DefaultOpen)) {
-        bool fc = g_freecam, nc = g_noclip;
-        if (ImGui::Checkbox("Freecam", &fc)) { if (fc != g_freecam) ToolsToggleFreecam(); }
-        ImGui::SameLine(); ImGui::TextDisabled("(%s)", g_cfg.keyFreecam.text);
-        ImGui::SameLine(0, 30);
-        if (ImGui::Checkbox("Noclip", &nc)) { if (nc != g_noclip) ToolsToggleNoclip(); }
-        ImGui::SameLine(); ImGui::TextDisabled("(%s)", g_cfg.keyNoclip.text);
-        SliderBox("Freecam speed (m/s)", &g_cfg.freecamSpeed, 1.0f, 200.0f, 0.1f, 1000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
-        SliderBox("Noclip speed (m/s)", &g_cfg.noclipSpeed, 1.0f, 200.0f, 0.1f, 1000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
-        ImGui::Text("camera %.1f %.1f %.1f (height %.0f m)", g_lastCamPos[0], g_lastCamPos[1], g_lastCamPos[2], g_lastCamPos[2]);
-        ImGui::Text("player %.1f %.1f %.1f", g_lastPlayerPos[0], g_lastPlayerPos[1], g_lastPlayerPos[2]);
-        ImGui::BeginDisabled(!g_freecam);
-        if (ImGui::Button("Move player to camera")) g_teleportToCam = true;
-        ImGui::EndDisabled();
-        ImGui::TextDisabled("Move: WASD, Space up, C down, mouse look, Shift x5, Alt x0.2, wheel = freecam speed.\n"
-                            "The world streams around the player: use 'Move player to camera' before flying far.");
-    }
+    bool freeze = g_freezeTime;
+    if (ImGui::Checkbox("Freeze time", &freeze)) g_freezeTime = freeze;
+    float speed = g_timeSpeed;
+    if (SliderBox("Time speed", &speed, 0.1f, 60.0f, 0.05f, 1000.0f, "%.1fx", ImGuiSliderFlags_Logarithmic)) g_timeSpeed = speed;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("1x")) g_timeSpeed = 1.0f;
+    bool lapse = g_timelapse;
+    if (ImGui::Checkbox("Timelapse", &lapse)) g_timelapse = lapse;
+    ImGui::SameLine();
+    ImGui::TextDisabled("(a game day in %.0f s)", 1440.0f * (g_baseMsPerMinute ? g_baseMsPerMinute : 1000) / 1000.0f / g_timelapseSpeed);
+    SliderBox("Timelapse speed", &g_timelapseSpeed, 30.0f, 1000.0f, 1.0f, 1000.0f, "%.0fx", ImGuiSliderFlags_Logarithmic);
+
+    ImGui::SeparatorText("Draw distance");
+    SliderBox("LOD distance", &g_cfg.lodDistance, 0.5f, 4.0f, 0.1f, 10.0f, "x%.2f");
+    ImGui::TextDisabled(g_lodMult ? "multiplier now %.2f (DE: 70/FOV = 1.0; PC slider max 1.8)" : "not available on this build",
+                        g_lodMult ? *g_lodMult : 0.0f);
+
+    ImGui::SeparatorText("Camera / player");
+    bool fc = g_freecam, nc = g_noclip;
+    if (ImGui::Checkbox("Freecam", &fc)) { if (fc != g_freecam) ToolsToggleFreecam(); }
+    ImGui::SameLine(); ImGui::TextDisabled("(%s)", g_cfg.keyFreecam.text);
+    ImGui::SameLine(0, 30);
+    if (ImGui::Checkbox("Noclip", &nc)) { if (nc != g_noclip) ToolsToggleNoclip(); }
+    ImGui::SameLine(); ImGui::TextDisabled("(%s)", g_cfg.keyNoclip.text);
+    SliderBox("Freecam speed (m/s)", &g_cfg.freecamSpeed, 1.0f, 200.0f, 0.1f, 1000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+    SliderBox("Noclip speed (m/s)", &g_cfg.noclipSpeed, 1.0f, 200.0f, 0.1f, 1000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+    ImGui::Text("camera %.1f %.1f %.1f (height %.0f m)", g_lastCamPos[0], g_lastCamPos[1], g_lastCamPos[2], g_lastCamPos[2]);
+    ImGui::Text("player %.1f %.1f %.1f", g_lastPlayerPos[0], g_lastPlayerPos[1], g_lastPlayerPos[2]);
+    ImGui::BeginDisabled(!g_freecam);
+    if (ImGui::Button("Move player to camera")) g_teleportToCam = true;
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("Move: WASD, Space up, C down, mouse look, Shift x5, Alt x0.2, wheel = freecam speed.\n"
+                        "The world streams around the player: use 'Move player to camera' before flying far.");
 }
 
 // ---------------------------------------------------------------- install

@@ -93,7 +93,9 @@ static std::unordered_map<int32_t, uint8_t*> g_meshes;   // fixture meshes whose
 static std::unordered_set<uint8_t*> g_owners;            // owners of shadowed lights
 static volatile int g_shadowedCount = 0, g_meshCount = 0;
 
+static int g_calls = 0; // ProcessEvent calls this frame (the scan stops at kCallBudget)
 static void Call(uint8_t* obj, uint8_t* fn, void* parm) {
+    ++g_calls;
     ((void (*)(void*, void*, void*))(*(void***)obj)[UO::ProcessEventSlot])(obj, fn, parm);
 }
 static void SetCastShadows(uint8_t* comp, bool on) { Call(comp, g_fnSetCastShadows, &on); }
@@ -167,10 +169,21 @@ void OtherLightShadowsFrame() {
                 SetIntensity(kv.second.comp, kv.second.intensity * scale[kv.second.kind]);
         applied[kBollard] = scale[kBollard]; applied[kGlobe] = scale[kGlobe];
     }
-    // ponytail: 4096 GObjects slots per frame (full pass ~100 frames), as peds.cpp; lamps stream in slower than that.
+    // ponytail: 4096 GObjects slots per frame (full pass ~100 frames); lamps stream in slower than that.
+    // Most slots are rejected on their class alone; the maps are only looked up for lights and for tracked owners' parts.
+    // A street of lamps streaming in at once (~180 setter calls, 1.3 ms measured while driving) is spread over frames:
+    // the scan stops after kCallBudget calls and resumes at the same slot next frame.
+    constexpr int kCallBudget = 32;
+    g_calls = 0;
     const int32_t count = *(int32_t*)(g_objects + 0x14);
-    for (int n = 0; n < 4096 && count > 0; ++n) {
-        if (cursor >= count) cursor = 0;
+    for (int n = 0; n < 4096 && count > 0 && g_calls < kCallBudget; ++n) {
+        if (cursor >= count) { // full pass: forget dead entries (their slots get reused) and rebuild the owner set
+            cursor = 0;
+            for (auto it = g_lights.begin(); it != g_lights.end();) it = LiveAt(it->first, it->second.comp) ? std::next(it) : g_lights.erase(it);
+            for (auto it = g_meshes.begin(); it != g_meshes.end();) it = LiveAt(it->first, it->second) ? std::next(it) : g_meshes.erase(it);
+            g_owners.clear();
+            if (shadows) for (auto& kv : g_lights) g_owners.insert(kv.second.owner);
+        }
         const int32_t i = cursor++;
         uint8_t* item = ObjectItem(i);
         uint8_t* obj = item ? *(uint8_t**)item : nullptr;
@@ -184,16 +197,25 @@ void OtherLightShadowsFrame() {
             continue;
         }
         if (!g_fnSetCastShadows || !g_fnSetIntensity || !g_fnSetMeshShadow) continue;
-        if ((*(uint32_t*)(obj + UO::Flags) & 0x30) || g_lights.count(i) || g_meshes.count(i)) continue; // CDO / archetype, seen
+        const bool light = cls == nPoint || cls == nSpot;
+        if (!light && (!shadows || g_owners.empty())) continue;
+        if (*(uint32_t*)(obj + UO::Flags) & 0x30) continue; // CDO / archetype
         uint8_t* owner = *(uint8_t**)(obj + UO::Outer);
         if (!owner) continue;
-        if (cls != nPoint && cls != nSpot) { // a fixture's own mesh: no shadow, or it blacks out its light
-            if (shadows && g_owners.count(owner) && (obj[kMeshCastShadow] & 0x20) && IsA(obj, nPrim)
-                && *(float*)(obj + kBoundsRadius) < kFixtureRadius) {
+        if (!light) { // a fixture's own mesh: no shadow, or it blacks out its light
+            if (!g_owners.count(owner)) continue;
+            const auto seen = g_meshes.find(i);
+            if (seen != g_meshes.end() && seen->second == obj) continue;
+            if (IsA(obj, nPrim) && (obj[kMeshCastShadow] & 0x20) && *(float*)(obj + kBoundsRadius) < kFixtureRadius) {
                 SetMeshShadow(obj, false);
-                g_meshes.emplace(i, obj);
+                g_meshes[i] = obj;
             }
             continue;
+        }
+        const auto seen = g_lights.find(i);
+        if (seen != g_lights.end()) {
+            if (seen->second.comp == obj) continue;
+            g_lights.erase(seen); // slot reused by a new light
         }
         if (Skipped(owner)) continue;
         const bool street = nStreet >= 0 && IsA(owner, nStreet);
@@ -225,9 +247,13 @@ void StreetLightsPanel() {
     if (!g_drawVar) { ImGui::TextDisabled("unavailable (see SkyGfxDE.log)"); return; }
     SliderBox("Light distance", &g_cfg.lampDrawDistance, 0.0f, 500.0f, 0.0f, 5000.0f, "%.0f m");
     SliderBox("Shadow distance", &g_cfg.lampShadowDistance, 0.0f, 150.0f, 0.0f, 1000.0f, "%.0f m");
-    ImGui::TextDisabled("DE's: %d / %d cm (0 = DE's); applies to lamps as they stream in", g_deDraw, g_deShadow);
     ImGui::Checkbox("Shadows for all lights", &g_cfg.otherLightShadows);
     SliderBox("Park bollard brightness", &g_cfg.bollardBrightness, 0.0f, 1.0f, 0.0f, 4.0f);
     SliderBox("Park globe lamp brightness", &g_cfg.globeLampBrightness, 1.0f, 16.0f, 0.0f, 50.0f);
+}
+
+void StreetLightsInfo() {
+    if (!g_drawVar) { ImGui::TextDisabled("unavailable (see SkyGfxDE.log)"); return; }
+    ImGui::TextDisabled("DE's: %d / %d cm (0 = DE's); applies to lamps as they stream in", g_deDraw, g_deShadow);
     ImGui::TextDisabled("%d lights, %d fixture meshes without shadow", g_shadowedCount, g_meshCount);
 }
